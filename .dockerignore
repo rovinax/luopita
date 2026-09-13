@@ -1,0 +1,12 @@
+.venv
+__pycache__
+*.pyc
+.git
+.cursor
+log
+web/node_modules
+*.db
+.env
+agent-transcripts
+data/napcat/QQ
+data/napcat/plugins

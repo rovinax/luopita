@@ -1,0 +1,38 @@
+HOST: 0.0.0.0
+PORT: 5170
+DATABASE_URL: postgresql://luopita:luopita@127.0.0.1:5432/luopita
+LOG_LEVEL: INFO
+LOG_DIR: log
+LOG_FILE: chatbot.log
+
+LLM:
+  PROVIDER: deepseek
+  MODEL: deepseek-chat
+  VISION_MODEL: deepseek-flash
+  BASE_URL: https://api.deepseek.com
+  API_KEY: ""
+
+PLATFORMS:
+  NAPCAT:
+    ENABLED: false
+    BOT_URL: http://127.0.0.1:3000
+    BOT_ID: ""
+    ACCESS_TOKEN: ""
+  TUI:
+    ENABLED: true
+
+AGENT:
+  TIMEOUT_SEC: 30
+  WORKDIR: .
+  SHORT_TERM_MESSAGES: 16
+  COMMAND_ALLOWLIST:
+    - ls
+    - pwd
+    - whoami
+    - date
+    - echo
+    - cat
+    - head
+    - tail
+    - python
+    - uv

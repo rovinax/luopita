@@ -1,0 +1,98 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      TZ: Asia/Shanghai
+      POSTGRES_USER: luopita
+      POSTGRES_PASSWORD: luopita
+      POSTGRES_DB: luopita
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U luopita -d luopita"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks:
+      - luopita
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks:
+      - luopita
+
+  napcat:
+    image: mlikiowa/napcat-docker:latest
+    container_name: luopita-napcat
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      NAPCAT_UID: ${NAPCAT_UID:-1000}
+      NAPCAT_GID: ${NAPCAT_GID:-1000}
+      WEBUI_TOKEN: ${NAPCAT_WEBUI_TOKEN:-napcat}
+    ports:
+      - "${NAPCAT_HTTP_PORT:-3000}:3000"
+      - "${NAPCAT_WS_PORT:-3001}:3001"
+      - "${NAPCAT_WEBUI_PORT:-6099}:6099"
+    volumes:
+      - ./data/napcat/config:/app/napcat/config
+      - ./data/napcat/QQ:/app/.config/QQ
+      - ./data/napcat/plugins:/app/napcat/plugins
+    shm_size: 2gb
+    mac_address: "02:42:ac:11:00:02"
+    networks:
+      - luopita
+
+  app:
+    build: .
+    restart: unless-stopped
+    user: "${NAPCAT_UID:-1000}:${NAPCAT_GID:-1000}"
+    ports:
+      - "5170:5170"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      TZ: Asia/Shanghai
+      LUOPITA_DATABASE_URL: postgresql://luopita:luopita@postgres:5432/luopita
+      LUOPITA_REDIS_URL: redis://redis:6379/0
+      LUOPITA_ADMIN_TOKEN: ${LUOPITA_ADMIN_TOKEN:-}
+      LUOPITA_HOST: 0.0.0.0
+      LUOPITA_PORT: "5170"
+      LUOPITA_NAPCAT_ENABLED: ${LUOPITA_NAPCAT_ENABLED:-true}
+      LUOPITA_NAPCAT_URL: http://napcat:3000
+      LUOPITA_NAPCAT_TOKEN: ${LUOPITA_NAPCAT_TOKEN:-luopita}
+      LUOPITA_LOG_DIR: /tmp/luopita-log
+    volumes:
+      - ./config:/app/config
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5170/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      napcat:
+        condition: service_started
+    networks:
+      - luopita
+
+networks:
+  luopita:
+    driver: bridge
+
+volumes:
+  pgdata:

@@ -1,0 +1,68 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local secrets / runtime
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+secrets/
+*.sqlite3
+*.db
+
+# Logs & caches
+*.log
+log/
+logs/
+tmp/
+.cache/
+
+# IDE / editor
+.vscode/
+.idea/
+*.iml
+.cursor/
+*.swp
+*~
+
+# Frontend build
+web/node_modules/
+web/dist/
+
+# NapCat / QQ local state (login session, account configs)
+data/napcat/QQ/
+data/napcat/plugins/
+data/napcat/config/onebot11_*.json
+data/napcat/config/napcat_*.json
+data/napcat/config/webui.json
+data/napcat/config/passkey.json
+
+# Local identity / persona overrides (templates are *.example.yaml)
+config/identity.yaml
+config/person.local.yaml
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor / agent scratch
+*.orig
+*.bak

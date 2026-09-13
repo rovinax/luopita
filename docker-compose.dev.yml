@@ -1,0 +1,39 @@
+# Local development overlay: hot reload + source mounts.
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build -d
+# Or set in .env:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml
+
+services:
+  app:
+    volumes:
+      - ./app:/app/app
+      - ./core:/app/core
+      - ./agent:/app/agent
+      - ./interface:/app/interface
+      - ./utils:/app/utils
+      - ./msg:/app/msg
+      - ./config:/app/config
+      - ./web/dist:/app/web/dist
+    command:
+      [
+        "/app/.venv/bin/uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "5170",
+        "--reload",
+        "--reload-dir",
+        "/app/app",
+        "--reload-dir",
+        "/app/core",
+        "--reload-dir",
+        "/app/agent",
+        "--reload-dir",
+        "/app/interface",
+        "--reload-dir",
+        "/app/utils",
+        "--reload-dir",
+        "/app/msg",
+      ]

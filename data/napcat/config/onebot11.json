@@ -1,0 +1,35 @@
+{
+  "network": {
+    "httpServers": [
+      {
+        "name": "luopita-http",
+        "enable": true,
+        "port": 3000,
+        "host": "0.0.0.0",
+        "enableCors": true,
+        "enableWebsocket": false,
+        "messagePostFormat": "array",
+        "token": "luopita",
+        "debug": false
+      }
+    ],
+    "httpSseServers": [],
+    "httpClients": [
+      {
+        "name": "luopita-webhook",
+        "enable": true,
+        "url": "http://app:5170/webhooks/napcat",
+        "messagePostFormat": "array",
+        "reportSelfMessage": false,
+        "token": "luopita",
+        "debug": false
+      }
+    ],
+    "websocketServers": [],
+    "websocketClients": [],
+    "plugins": []
+  },
+  "musicSignUrl": "",
+  "enableLocalFile2Url": true,
+  "parseMultMsg": false
+}

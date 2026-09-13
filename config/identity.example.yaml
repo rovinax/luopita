@@ -1,0 +1,22 @@
+owners:
+- platform: admin
+  user_id: admin
+  nickname: 控制台
+- platform: tui
+  user_id: tui
+  nickname: TUI
+# - platform: napcat
+#   user_id: "你的QQ号"
+#   nickname: 主人
+group_require_at: true
+wake_keywords:
+- 小lu
+- 小Lu
+- luopita
+- 小陆
+- 小路
+group_tech_chance: 0.22
+group_chatty_chance: 0.1
+group_chime_cooldown_sec: 45
+group_engage_sec: 90
+group_engage_replies: 2

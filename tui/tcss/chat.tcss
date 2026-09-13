@@ -1,0 +1,29 @@
+Screen {
+    background: #161410;
+}
+
+Header {
+    background: #2a2118;
+    color: #f3e6d0;
+}
+
+#status {
+    padding: 0 1;
+    color: #d4a056;
+    height: 1;
+}
+
+#transcript {
+    border: solid #3d3226;
+    height: 1fr;
+    background: #1c1812;
+}
+
+#composer {
+    border: solid #d4a056;
+    background: #1c1812;
+}
+
+Button {
+    width: 100%;
+}
