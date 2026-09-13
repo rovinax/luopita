@@ -191,10 +191,12 @@ def compose_system_prompt(
         lines.append(
             f"需要看本机、查天气或访问网页时，必须先调用 run_shell，不要假装跑过。"
             f"这一轮允许的命令：{allow_text}。"
+            "run_shell 不是 bash：一次只跑一条命令，不能用管道、分号、&& 或 $()。"
             "同一条命令这一轮只跑一次；已经有输出就直接用。"
-            "上一轮如果报 command not allowed，而这条命令现在已经在列表里，必须再跑一次。"
+            "上一轮如果报 command not allowed 或 not bash，而这条命令现在已经在列表里，必须再跑一次，而且只能是单条命令。"
             "查日期用 get_current_date。"
             "QQ 仅在主人明确要求时用 qq_*。不要碰 cookies、凭证或退出机器人。"
+            "斜杠命令（/help /ping /status /time /whoami /model /allow /clear）由系统直接执行，不要假装跑过，也不要编一份命令表。"
         )
         if in_group:
             lines.append("现在是群聊，当众说话要有分寸，不要主动把私聊里的事讲出来。")

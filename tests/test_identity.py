@@ -314,6 +314,9 @@ class TestVoiceAndRole(unittest.TestCase):
         self.assertIn("---", private)
         self.assertIn("curl", private)
         self.assertIn("必须再跑一次", private)
+        self.assertIn("不是 bash", private)
+        self.assertIn("不能用管道", private)
+        self.assertIn("/help", private)
 
     def test_role_contextvar(self):
         token = set_current_role("owner")
@@ -421,6 +424,8 @@ class TestToolDeny(unittest.IsolatedAsyncioTestCase):
             )
         }
         self.assertIn("curl", tools["run_shell"].description)
+        self.assertIn("not bash", tools["run_shell"].description)
+        self.assertIn("no pipes", tools["run_shell"].description)
 
     async def test_user_graph_has_no_dangerous_tools(self):
         from agent.tools import build_tools

@@ -10,6 +10,19 @@ from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage
 
 from core.agent_runtime import begin_shell_turn, end_shell_turn
 from core.bubbles import split_reply_bubbles
+from core.commands import (
+    parse_slash,
+    render_allow,
+    render_cleared,
+    render_help,
+    render_model,
+    render_ping,
+    render_status,
+    render_time,
+    render_unknown,
+    render_whoami,
+)
+from core.group_context.keys import shard_session_key
 from core.graph import GRAPH_RECURSION_LIMIT, INVOKE_TIMEOUT_SEC
 from core.group_talk import (
     GROUP_CONTEXT_LIMIT,
@@ -123,6 +136,136 @@ class ChatOrchestrator:
 
     def _graph_for(self, role: str) -> Any:
         return self.owner_graph if role == "owner" else self.user_graph
+
+    async def _try_owner_command(
+        self, inbound: InboundMessage, role: str, *, deliver: bool = True
+    ) -> ChatResponse | None:
+        if role != "owner":
+            return None
+        cfg = self.get_config()
+        ident = self.identity.settings
+        parsed = parse_slash(
+            inbound.text,
+            keywords=ident.wake_keywords,
+            persona_name=cfg.persona.name,
+        )
+        if parsed is None:
+            return None
+        name, _args = parsed
+        if name == "help":
+            reply = render_help()
+        elif name == "ping":
+            reply = render_ping()
+        elif name == "time":
+            reply = render_time()
+        elif name == "whoami":
+            reply = render_whoami(
+                nickname=self.identity.owner_nickname(inbound.platform, inbound.user_id),
+                platform=inbound.platform,
+                user_id=inbound.user_id,
+                channel_type=inbound.channel_type,
+                chat_id=inbound.chat_id,
+                bot_id=(cfg.napcat.bot_id or inbound.self_id or "").strip(),
+            )
+        elif name == "model":
+            reply = render_model(
+                provider=cfg.llm.provider,
+                model=cfg.llm.model,
+                vision_model=cfg.llm.vision_model,
+            )
+        elif name == "allow":
+            reply = render_allow(cfg.agent.command_allowlist)
+        elif name == "status":
+            reply = await self._command_status(inbound)
+        elif name == "clear":
+            await self._clear_owner_memory(inbound, role)
+            reply = render_cleared()
+        else:
+            reply = render_unknown(name)
+        return await self._emit_command_reply(inbound, role, reply, deliver=deliver)
+
+    async def _command_status(self, inbound: InboundMessage) -> str:
+        cfg = self.get_config()
+        db_ok = False
+        redis_ok = False
+        try:
+            db_ok = await self.memory.db.ping()
+        except Exception:
+            db_ok = False
+        pipeline = self.group_pipeline
+        if pipeline is not None:
+            try:
+                redis_ok = await pipeline.hot.redis.ping()
+            except Exception:
+                redis_ok = False
+        napcat = self.adapters.get("napcat")
+        napcat_on = bool(napcat is not None and napcat.enabled())
+        return render_status(
+            provider=cfg.llm.provider,
+            model=cfg.llm.model,
+            database="memory" if cfg.is_memory_db() else "postgres",
+            db_ok=db_ok,
+            redis="memory" if cfg.is_memory_redis() else "redis",
+            redis_ok=redis_ok,
+            napcat_on=napcat_on,
+            bot_id=(cfg.napcat.bot_id or inbound.self_id or "").strip(),
+        )
+
+    async def _clear_owner_memory(self, inbound: InboundMessage, role: str) -> None:
+        thread_ids = [inbound.session_key]
+        pipeline = self.group_pipeline
+        if inbound.channel_type == "group" and pipeline is not None:
+            active = await pipeline.hot.get_active_shard(
+                inbound.platform, inbound.chat_id, inbound.user_id
+            )
+            if active:
+                thread_ids.append(shard_session_key(inbound.platform, inbound.chat_id, active))
+                await pipeline.hot.set_active_shard(
+                    inbound.platform, inbound.chat_id, inbound.user_id, ""
+                )
+        seen: set[str] = set()
+        for thread_id in thread_ids:
+            if not thread_id or thread_id in seen:
+                continue
+            seen.add(thread_id)
+            for graph in (self.owner_graph, self.user_graph):
+                saver = getattr(graph, "checkpointer", None)
+                if saver is None:
+                    continue
+                try:
+                    await saver.adelete_thread(thread_id)
+                except Exception as exc:
+                    self.logger.warning(f"clear thread skip id={thread_id}: {exc}")
+
+    async def _emit_command_reply(
+        self, inbound: InboundMessage, role: str, reply: str, *, deliver: bool = True
+    ) -> ChatResponse:
+        cfg = self.get_config()
+        session_id = inbound.session_key
+        await self.memory.db.ensure_session(
+            session_id=session_id,
+            user_id=inbound.user_id,
+            platform=inbound.platform,
+            channel_type=inbound.channel_type,
+        )
+        await self.memory.db.save_message(session_id, "user", inbound.text, provider=cfg.llm.provider)
+        await self.memory.db.save_message(session_id, "assistant", reply, provider="command")
+        if deliver:
+            await self.adapters.send(
+                OutboundMessage(
+                    platform=inbound.platform,
+                    channel_type=inbound.channel_type,
+                    chat_id=inbound.chat_id,
+                    text=reply,
+                    session_key=session_id,
+                    user_id=inbound.user_id,
+                )
+            )
+        self.logger.info(
+            f"chat session={session_id} role={role} mode=command bubbles=1 "
+            f"platform={inbound.platform} latency_ms=0"
+        )
+        return ChatResponse(session_id=session_id, reply=reply, ignored=False, role=role)
 
     async def _park_unreplied(
         self,
@@ -313,6 +456,9 @@ class ChatOrchestrator:
         session_id = inbound.session_key
         role = self.identity.resolve_role(inbound.platform, inbound.user_id)
         ident = self.identity.settings
+        commanded = await self._try_owner_command(inbound, role, deliver=deliver)
+        if commanded is not None:
+            return commanded
         chat_key = f"{inbound.platform}:{inbound.channel_type}:{inbound.chat_id}"
         bot_id = (cfg.napcat.bot_id or inbound.self_id or "").strip()
         if inbound.self_id and not (cfg.napcat.bot_id or "").strip():
