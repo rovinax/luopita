@@ -47,6 +47,9 @@ tmp/
 web/node_modules/
 web/dist/
 
+# MkDocs
+site/
+
 # NapCat / QQ local state (login session, account configs)
 data/napcat/QQ/
 data/napcat/plugins/

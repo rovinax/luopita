@@ -1,0 +1,78 @@
+site_name: Luopita
+site_description: Human-like QQ group chatbot kernel — NapCat, LangGraph, per-speaker context
+site_url: https://rovinax.github.io/luopita/
+site_author: rovina
+repo_url: https://github.com/rovinax/luopita
+repo_name: rovinax/luopita
+edit_uri: edit/master/docs/
+copyright: Copyright &copy; 2026 rovina
+
+theme:
+  name: material
+  language: zh
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: 跟随系统
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: amber
+      toggle:
+        icon: material/weather-sunny
+        name: 浅色
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: amber
+      toggle:
+        icon: material/weather-night
+        name: 深色
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+    - toc.follow
+
+plugins:
+  - search:
+      lang:
+        - zh
+        - en
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/rovinax/luopita
+
+nav:
+  - 首页: index.md
+  - 快速开始: getting-started.md
+  - 部署: deploy.md
+  - 架构: architecture.md
+  - 配置: configuration.md
+  - 安全: security.md
+  - 贡献: contributing.md

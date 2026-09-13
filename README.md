@@ -2,10 +2,12 @@
 
 [![CI](https://github.com/rovinax/luopita/actions/workflows/ci.yml/badge.svg)](https://github.com/rovinax/luopita/actions/workflows/ci.yml)
 [![Docker](https://github.com/rovinax/luopita/actions/workflows/docker.yml/badge.svg)](https://github.com/rovinax/luopita/actions/workflows/docker.yml)
+[![Docs](https://github.com/rovinax/luopita/actions/workflows/docs.yml/badge.svg)](https://github.com/rovinax/luopita/actions/workflows/docs.yml)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![FastAPI](https://img.shields.io/badge/API-FastAPI-009688.svg)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/agent-LangGraph-violet.svg)](https://github.com/langchain-ai/langgraph)
+[![Docs Site](https://img.shields.io/badge/docs-MkDocs%20Material-teal.svg)](https://rovinax.github.io/luopita/)
 
 **会像人一样插话的 QQ 群聊机器人内核** — NapCat / OneBot 接入，LangGraph Agent 驱动，群聊按说话人分片，热上下文进 Redis，冷记忆落 Postgres + pgvector。
 
@@ -55,7 +57,7 @@ uv run python main.py
 
 打开 http://127.0.0.1:5170 — mock 模式下无需 API Key 也能走通对话链路。
 
-更完整的安装、Docker、扫码登录 QQ 见 **[部署教程](docs/DEPLOY.md)**。
+更完整的安装、Docker、扫码登录 QQ 见 **[文档站](https://rovinax.github.io/luopita/)**（[部署教程](docs/deploy.md)）。
 
 ## Docker 一键（接 QQ）
 
@@ -88,7 +90,7 @@ COMPOSE_FILE=docker-compose.yml docker compose up --build -d
 | `config/identity.yaml` | 主人、唤醒词、群聊策略（gitignore） |
 | `config/person.yaml` | 人格；可用 `person.example.yaml` 覆盖 |
 
-密钥相关约定见 [SECURITY.md](SECURITY.md)。**不要把真实 QQ、`.env`、NapCat 登录态提交进仓库。**
+密钥相关约定见 [SECURITY.md](SECURITY.md) / [文档·安全](https://rovinax.github.io/luopita/security/)。**不要把真实 QQ、`.env`、NapCat 登录态提交进仓库。**
 
 ## 开发与测试
 
@@ -96,9 +98,13 @@ COMPOSE_FILE=docker-compose.yml docker compose up --build -d
 uv run python -m unittest discover -s tests -p "test_*.py"
 uv run python tui/ui.py          # 需先起后端
 cd web && npm install && npm run dev   # Vite :5173 → 代理 :5170
+
+# 本地预览文档站
+uv sync --group docs
+uv run mkdocs serve
 ```
 
-CI 会在每次 push / PR 跑单元测试与前端构建；`master` 与 `v*` tag 会构建并推送镜像到 `ghcr.io/rovinax/luopita`。
+CI 会在每次 push / PR 跑单元测试、前端构建与文档构建；`master` 会部署 [GitHub Pages 文档站](https://rovinax.github.io/luopita/)，并推送镜像到 `ghcr.io/rovinax/luopita`。
 
 ```bash
 docker pull ghcr.io/rovinax/luopita:latest

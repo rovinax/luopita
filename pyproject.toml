@@ -37,3 +37,8 @@ dependencies = [
     "uvicorn[standard]>=0.32.0",
     "websockets>=14.0",
 ]
+
+[dependency-groups]
+docs = [
+    "mkdocs-material>=9.6.0",
+]

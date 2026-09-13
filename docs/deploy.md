@@ -1,6 +1,6 @@
-# Deploy Luopita
+# 部署
 
-本页是从零到可回消息的部署说明。仓库根目录 [README](../README.md) 有功能概览。
+本页是从零到可回消息的部署说明。功能概览见 [首页](index.md)。
 
 ## 0. 准备
 
@@ -62,35 +62,11 @@ docker compose logs napcat | head
 
 ## 3. 无 Docker 的纯本地开发
 
-适合跑单测 / mock：
-
-```bash
-cp .env.example .env
-export LUOPITA_DATABASE_URL=memory://
-export LUOPITA_REDIS_URL=memory://
-export LUOPITA_PROVIDER=mock
-export LUOPITA_NAPCAT_ENABLED=false
-
-uv sync
-uv run python main.py
-```
-
-前端：
-
-```bash
-cd web && npm install && npm run dev
-```
+适合跑单测 / mock，见 [快速开始](getting-started.md)。
 
 ## 4. 配置落点
 
-| 文件 / 变量 | 作用 |
-|-------------|------|
-| `.env` | 密钥与 Compose 连接串（勿提交） |
-| `config/sys.yaml` | 非密钥默认项 |
-| `config/person.yaml` | 人格（可用控制台改） |
-| `config/identity.yaml` | 主人 QQ、唤醒词、群聊策略 |
-| Postgres | 会话 / 群事件 / 向量冷记忆 |
-| Redis | 群活跃分片热上下文 |
+详见 [配置](configuration.md)。
 
 ## 5. 生产注意
 
@@ -98,6 +74,7 @@ cd web && npm install && npm run dev
 - 必须设置 `LUOPITA_ADMIN_TOKEN`。
 - WSL2：NapCat 放在 Linux 容器即可；若用宿主机 NapCat，把 webhook 指到 WSL IP，而不是容器名 `app`。
 - 升级：`git pull` 后 `docker compose up --build -d`；QQ 登录态在 volume `data/napcat/QQ/`，一般可保留。
+- 更多加固见 [安全](security.md)。
 
 ## 6. 验证清单
 
