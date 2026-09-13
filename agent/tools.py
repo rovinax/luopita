@@ -27,19 +27,20 @@ def build_tools(
 
     @tool
     def run_shell(command: str) -> str:
-        """Run a whitelisted local shell command and return STDOUT/STDERR."""
+        """Run one whitelisted program (not bash) and return STDOUT/STDERR."""
         if not is_owner_role():
             return OWNER_REFUSAL
         return execute_command(payload=command, policy=get_policy(), logger=log)
 
     allowed = ", ".join(sorted(get_policy().allow)) or "(none)"
     run_shell.description = (
-        "Run a local shell command and return STDOUT/STDERR. "
+        "Run one local program and return STDOUT/STDERR. "
+        "This is not bash: no pipes, redirects, ';', '&&', or '$()'. "
         f"Allowed programs right now: {allowed}. "
-        "Do not call the same command twice in one turn. "
+        "One program per call. Do not call the same command twice in one turn. "
         "If a previous turn said the command was not allowed "
         "but it now appears in the allowed list, call it once. "
-        "Example: curl -sS wttr.in/Chongqing"
+        "Example: curl -sS https://wttr.in/Chongqing"
     )
 
     tools: list[BaseTool] = [get_current_date]

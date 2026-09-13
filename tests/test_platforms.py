@@ -68,6 +68,32 @@ class TestCommandPolicy(unittest.TestCase):
         ninth = execute_command("echo extra", policy=policy)
         self.assertIn("too many", ninth)
 
+    def test_rejects_pipe_and_keeps_query_ampersand(self):
+        policy = CommandPolicy(allow={"echo", "curl"}, workdir=".", timeout_sec=5)
+        piped = execute_command(
+            'curl -sS "https://zh.wikipedia.org/w/api.php?action=query&list=search" | head -c 800',
+            policy=policy,
+        )
+        self.assertIn("not bash", piped)
+        self.assertNotIn("Could not resolve host", piped)
+        chained = execute_command("echo hi && echo there", policy=policy)
+        self.assertIn("not bash", chained)
+        glued = execute_command("echo hi; echo there", policy=policy)
+        self.assertIn("not bash", glued)
+        sub = execute_command("echo $(whoami)", policy=policy)
+        self.assertIn("not bash", sub)
+        ok = execute_command("echo https://example.com/search?q=foo&bar=1", policy=policy)
+        self.assertNotIn("not bash", ok)
+        self.assertIn("foo", ok)
+
+    def test_clips_huge_stdout(self):
+        from core.agent_runtime import MAX_STDOUT_CHARS
+
+        policy = CommandPolicy(allow={"echo"}, workdir=".", timeout_sec=5)
+        result = execute_command("echo " + ("x" * 12000), policy=policy)
+        self.assertIn("truncated", result)
+        self.assertLess(len(result), MAX_STDOUT_CHARS + 200)
+
 
 class TestNapcatParse(unittest.TestCase):
     def test_private_string_message(self):

@@ -8,6 +8,14 @@ from utils.log import ChatbotLogger
 
 _SAFE_BIN_DIRS = {"/bin", "/usr/bin", "/usr/local/bin"}
 MAX_SHELL_CALLS_PER_TURN = 8
+MAX_STDOUT_CHARS = 8000
+MAX_STDERR_CHARS = 2000
+_SHELL_WORDS = {"|", "||", "&&", ";", "&", ">", ">>", "<", "<<"}
+_SHELL_HINT = (
+    "Error: run_shell is not bash. No pipes, redirects, ';', '&&', or '$()'. "
+    "Run one program per call, e.g. curl -sS \"https://example.com\". "
+    "Need less output? Call curl once; do not pipe to head."
+)
 _shell_turn: ContextVar[list[str] | None] = ContextVar("shell_turn", default=None)
 
 
@@ -60,6 +68,25 @@ def _argv0_name(raw: str) -> str:
     return name
 
 
+def _clip(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"\n...(truncated, {len(text)} chars total)"
+
+
+def _shell_syntax_reason(tokens: list[str]) -> str | None:
+    for tok in tokens:
+        if tok in _SHELL_WORDS:
+            return tok
+        if "`" in tok or "$(" in tok or tok.startswith(">(") or tok.startswith("<("):
+            return tok
+        if any(op in tok for op in ("|", "&&", "||")):
+            return tok
+        if ";" in tok and not tok.startswith(("http://", "https://", "ftp://")):
+            return tok
+    return None
+
+
 def execute_command(payload: str, policy: CommandPolicy, logger: ChatbotLogger | None = None) -> str:
     logger = logger or ChatbotLogger()
     payload = _normalize_payload(payload)
@@ -76,9 +103,15 @@ def execute_command(payload: str, policy: CommandPolicy, logger: ChatbotLogger |
                 "Stop calling run_shell and answer from what you already have."
             )
         hist.append(payload)
-    cmd_args = shlex.split(payload)
+    try:
+        cmd_args = shlex.split(payload)
+    except ValueError as exc:
+        return f"Error: could not parse command: {exc}. {_SHELL_HINT.removeprefix('Error: ')}"
     if not cmd_args:
         return "Error: empty command."
+    if _shell_syntax_reason(cmd_args):
+        logger.warning(f"agent command rejected shell-syntax cmd={cmd_args[0]}")
+        return _SHELL_HINT
 
     cmd = _argv0_name(cmd_args[0])
     if cmd not in policy.allow:
@@ -94,8 +127,8 @@ def execute_command(payload: str, policy: CommandPolicy, logger: ChatbotLogger |
             cwd=policy.workdir,
         )
         logger.info(f"agent command executed cmd={cmd} exit={result.returncode}")
-        stdout = result.stdout or ""
-        stderr = result.stderr or ""
+        stdout = _clip(result.stdout or "", MAX_STDOUT_CHARS)
+        stderr = _clip(result.stderr or "", MAX_STDERR_CHARS)
         if not stdout and not stderr:
             return "Execution successful (no output)."
         return f"STDOUT:\n{stdout}\nSTDERR:\n{stderr}"

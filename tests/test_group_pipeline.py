@@ -15,8 +15,43 @@ from core.database import InMemoryDatabase
 class TestTrigger(unittest.TestCase):
     def test_command_prefix(self):
         self.assertTrue(has_command_prefix("/help"))
-        self.assertTrue(has_command_prefix("!ping"))
+        self.assertFalse(has_command_prefix("!ping"))
+        self.assertFalse(has_command_prefix("。"))
+        self.assertFalse(has_command_prefix("..."))
         self.assertFalse(has_command_prefix("hello"))
+
+    def test_slash_command_owner_only(self):
+        owner = decide_trigger(
+            channel_type="group",
+            role="owner",
+            group_require_at=True,
+            text="/help",
+            command=True,
+        )
+        self.assertEqual(owner.mode, "direct")
+        self.assertTrue(owner.explicit)
+        user = decide_trigger(
+            channel_type="group",
+            role="user",
+            group_require_at=True,
+            text="/help",
+            command=True,
+        )
+        self.assertEqual(user.mode, "ignore")
+        self.assertFalse(user.explicit)
+
+    def test_owner_slash_after_reply_mark(self):
+        from core.group_context.trigger import extract_trigger_flags
+
+        mentioned, named, command = extract_trigger_flags(
+            text="[回复:1][@1001] /status",
+            at_user_ids=["1001"],
+            bot_id="1001",
+            wake_keywords=["小Lu"],
+            persona_name="小Lu",
+        )
+        self.assertTrue(command)
+        self.assertTrue(mentioned)
 
     def test_reply_bot_is_explicit(self):
         result = decide_trigger(

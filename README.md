@@ -111,6 +111,7 @@ docker pull ghcr.io/rovinax/luopita:latest
 - 新平台：实现 `PlatformAdapter`（`enabled` + `send`），入站解析为 `InboundMessage`
 - NapCat WebSocket、飞书、Telegram 可挂到同一 `AdapterRegistry`
 - 命令走白名单 `run_shell`，危险 NapCat 动作（cookies / 退出登录等）默认拒绝
+- 主人斜杠命令：`/help` `/ping` `/status` `/time` `/whoami` `/model` `/allow` `/clear`
 
 ## 许可证
 

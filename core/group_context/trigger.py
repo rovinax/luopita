@@ -8,13 +8,14 @@ from core.group_talk import (
     decide_group_reply,
     looks_like_filler,
     mentioned_name,
+    strip_wake_noise,
 )
 from core.identity import mentioned_bot
 from core.group_context.keys import SEMANTIC_TRIGGER_THRESHOLD, cosine_similarity
 
 TriggerMode = GroupReplyMode
 
-_COMMAND_PREFIXES = ("/", "!", "！", ".", "。")
+_COMMAND_PREFIXES = ("/",)
 
 
 @dataclass
@@ -55,7 +56,8 @@ def decide_trigger(
     if channel_type != "group" or not group_require_at:
         return TriggerResult(mode="direct", explicit=True, reason="private_or_open")
 
-    if mentioned or named or replied_bot or command:
+    owner_command = command and role == "owner"
+    if mentioned or named or replied_bot or owner_command:
         return TriggerResult(
             mode="direct",
             explicit=True,
@@ -113,5 +115,6 @@ def extract_trigger_flags(
 ) -> tuple[bool, bool, bool]:
     mentioned = mentioned_bot(at_user_ids, bot_id)
     named = mentioned_name(text, wake_keywords, persona_name)
-    command = has_command_prefix(re.sub(r"\[CQ:[^\]]+\]", "", text or ""))
+    cleaned = re.sub(r"\[CQ:[^\]]+\]", "", text or "")
+    command = has_command_prefix(strip_wake_noise(cleaned, keywords=[], persona_name=""))
     return mentioned, named, command
