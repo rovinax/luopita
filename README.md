@@ -1,5 +1,7 @@
 # Luopita
 
+[![CI](https://github.com/rovinax/luopita/actions/workflows/ci.yml/badge.svg)](https://github.com/rovinax/luopita/actions/workflows/ci.yml)
+[![Docker](https://github.com/rovinax/luopita/actions/workflows/docker.yml/badge.svg)](https://github.com/rovinax/luopita/actions/workflows/docker.yml)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![FastAPI](https://img.shields.io/badge/API-FastAPI-009688.svg)](https://fastapi.tiangolo.com/)
@@ -95,6 +97,14 @@ uv run python -m unittest discover -s tests -p "test_*.py"
 uv run python tui/ui.py          # 需先起后端
 cd web && npm install && npm run dev   # Vite :5173 → 代理 :5170
 ```
+
+CI 会在每次 push / PR 跑单元测试与前端构建；`master` 与 `v*` tag 会构建并推送镜像到 `ghcr.io/rovinax/luopita`。
+
+```bash
+docker pull ghcr.io/rovinax/luopita:latest
+```
+
+首次拉取私有包需 `docker login ghcr.io`；仓库设为 Public 且 Package 可见性为 public 后可直接拉取。
 
 ## 扩展
 

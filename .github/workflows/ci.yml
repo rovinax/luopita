@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      LUOPITA_PROVIDER: mock
+      LUOPITA_API_KEY: ""
+      LUOPITA_DATABASE_URL: memory://
+      LUOPITA_REDIS_URL: memory://
+      LUOPITA_NAPCAT_ENABLED: "false"
+      LUOPITA_IDENTITY_FILE: ${{ github.workspace }}/config/identity.example.yaml
+      LUOPITA_PERSON_FILE: ${{ github.workspace }}/config/person.example.yaml
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Sync dependencies
+        run: uv sync --frozen
+
+      - name: Run unit tests
+        run: uv run python -m unittest discover -s tests -p "test_*.py" -v
+
+  web:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck and build
+        run: npm run build

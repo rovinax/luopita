@@ -106,3 +106,13 @@ cd web && npm install && npm run dev
 - [ ] mock 或真实模型能在控制台对话
 - [ ] NapCat 扫码成功，群 @ 有回复
 - [ ] `.env` / `identity.yaml` / QQ 目录未进入 git
+
+## 7. 预构建镜像（GitHub Actions）
+
+`master` 推送后可从 GHCR 拉镜像（无需本地 `docker compose build` 编译前端）：
+
+```bash
+docker pull ghcr.io/rovinax/luopita:latest
+```
+
+Compose 仍可用仓库内 `Dockerfile` 本地构建；CI 镜像适合快速试用或自建部署。
