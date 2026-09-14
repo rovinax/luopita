@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from core.chat import ChatOrchestrator
+from core.cron.service import CronService
 from core.database import Database, create_database
 from core.graph import build_graph, make_memory_checkpointer
 from core.group_context.pipeline import GroupContextPipeline
@@ -19,9 +20,11 @@ from utils.config import (
     AppConfig,
     IdentitySettings,
     OwnerEntry,
+    PersonaSettings,
     load_config,
     load_persona,
     merge_runtime_settings,
+    person_file,
     runtime_payload,
     save_persona,
 )
@@ -35,6 +38,22 @@ def _merge_section(current: dict[str, Any], patch: dict[str, Any], secret_keys: 
             continue
         out[key] = value
     return out
+
+
+def _restore_persona_from_store(disk: PersonaSettings, stored: Any) -> PersonaSettings | None:
+    """If yaml is still the code default but Postgres has a custom card, write it back to disk."""
+    if not isinstance(stored, dict):
+        return None
+    default = PersonaSettings()
+    if disk.model_dump() != default.model_dump():
+        return None
+    try:
+        saved = PersonaSettings.model_validate(stored)
+    except Exception:
+        return None
+    if saved.model_dump() == default.model_dump():
+        return None
+    return saved
 
 
 @dataclass
@@ -55,7 +74,10 @@ class Runtime:
     napcat: NapcatAdapter
     tui: TuiAdapter
     identity: IdentityStore
-    _checkpointer_pool: Any = field(default=None)
+    cron: CronService
+    cron_graph: Any
+    _checkpointer_pool: Any = field(default=None, repr=False)
+    _settings_stamp: tuple[float, float] | None = field(default=None, repr=False)
 
     @classmethod
     async def start(cls) -> "Runtime":
@@ -87,15 +109,24 @@ class Runtime:
             from utils.config import apply_env_overrides
 
             config = apply_env_overrides(config)
+            logger.set_level(config.log_level)
 
         identity = IdentityStore()
         identity_settings = identity.load()
-        config = config.model_copy(update={"identity": identity_settings, "persona": load_persona()})
+        persona = load_persona()
+        if stored:
+            incoming = stored.get("persona") if isinstance(stored, dict) else None
+            restored = _restore_persona_from_store(persona, incoming)
+            if restored is not None:
+                save_persona(restored)
+                persona = restored
+        config = config.model_copy(update={"identity": identity_settings, "persona": persona})
 
         checkpointer, pool = await cls._make_checkpointer(config)
         napcat = NapcatAdapter(config.napcat, logger=logger)
         tui = TuiAdapter(config.tui)
         adapters = AdapterRegistry([napcat, tui, AdminAdapter()], logger=logger)
+        cron = CronService(db, logger)
         runtime = cls(
             config=config,
             logger=logger,
@@ -113,10 +144,31 @@ class Runtime:
             napcat=napcat,
             tui=tui,
             identity=identity,
+            cron=cron,
+            cron_graph=None,
             _checkpointer_pool=pool,
         )
         runtime.owner_graph = build_graph(
-            config, logger, checkpointer, runtime.get_config, napcat=napcat, role="owner", memory=runtime.memory
+            config,
+            logger,
+            checkpointer,
+            runtime.get_config,
+            napcat=napcat,
+            role="owner",
+            memory=runtime.memory,
+            cron=cron,
+            include_cron=True,
+        )
+        runtime.cron_graph = build_graph(
+            config,
+            logger,
+            checkpointer,
+            runtime.get_config,
+            napcat=napcat,
+            role="owner",
+            memory=runtime.memory,
+            cron=None,
+            include_cron=False,
         )
         runtime.user_graph = build_graph(
             config, logger, checkpointer, runtime.get_config, napcat=napcat, role="user", memory=runtime.memory
@@ -132,8 +184,13 @@ class Runtime:
             get_config=runtime.get_config,
             identity=identity,
             group_pipeline=group_pipeline,
+            cron=cron,
+            cron_graph=runtime.cron_graph,
         )
+        cron.attach_runner(runtime.orchestrator.run_cron_turn)
+        await cron.start()
         await runtime._sync_bot_id()
+        runtime._touch_settings_stamp()
         logger.info(
             f"runtime started provider={config.llm.provider} "
             f"db={'memory' if config.is_memory_db() else 'postgres'} "
@@ -141,7 +198,34 @@ class Runtime:
         )
         return runtime
 
+    def _disk_stamp(self) -> tuple[float, float]:
+        def mtime(path: Any) -> float:
+            try:
+                return path.stat().st_mtime
+            except OSError:
+                return 0.0
+
+        return (mtime(self.identity.path), mtime(person_file()))
+
+    def _touch_settings_stamp(self) -> None:
+        self._settings_stamp = self._disk_stamp()
+
     def get_config(self) -> AppConfig:
+        stamp = self._disk_stamp()
+        if stamp != self._settings_stamp:
+            try:
+                self.sync_disk_settings()
+            except Exception as exc:
+                self.logger.warning(f"disk settings skip: {exc}")
+                self._settings_stamp = stamp
+        return self.config
+
+    def sync_disk_settings(self) -> AppConfig:
+        """Re-read identity and persona from yaml so chat and console match the files."""
+        identity_settings = self.identity.load()
+        persona = load_persona()
+        self.config = self.config.model_copy(update={"identity": identity_settings, "persona": persona})
+        self._touch_settings_stamp()
         return self.config
 
     async def _sync_bot_id(self) -> None:
@@ -180,15 +264,40 @@ class Runtime:
         self.napcat.update(self.config.napcat)
         self.tui.update(self.config.tui)
         self.owner_graph = build_graph(
-            self.config, self.logger, self.checkpointer, self.get_config, napcat=self.napcat, role="owner", memory=self.memory
+            self.config,
+            self.logger,
+            self.checkpointer,
+            self.get_config,
+            napcat=self.napcat,
+            role="owner",
+            memory=self.memory,
+            cron=self.cron,
+            include_cron=True,
+        )
+        self.cron_graph = build_graph(
+            self.config,
+            self.logger,
+            self.checkpointer,
+            self.get_config,
+            napcat=self.napcat,
+            role="owner",
+            memory=self.memory,
+            cron=None,
+            include_cron=False,
         )
         self.user_graph = build_graph(
             self.config, self.logger, self.checkpointer, self.get_config, napcat=self.napcat, role="user", memory=self.memory
         )
         self.graph = self.owner_graph
         self.orchestrator.attach(
-            self.owner_graph, self.user_graph, self.adapters, self.config, identity=self.identity,
+            self.owner_graph,
+            self.user_graph,
+            self.adapters,
+            self.config,
+            identity=self.identity,
             group_pipeline=self.group_pipeline,
+            cron_graph=self.cron_graph,
+            cron=self.cron,
         )
 
     async def apply_update(self, patch: ConfigUpdate) -> AppConfig:
@@ -210,8 +319,13 @@ class Runtime:
         if patch.log_level:
             data["log_level"] = patch.log_level
         self.config = AppConfig.model_validate(data)
+        if patch.log_level:
+            self.logger.set_level(self.config.log_level)
         if patch.persona:
             save_persona(self.config.persona)
+            self.config = self.config.model_copy(update={"persona": load_persona()})
+        else:
+            self.sync_disk_settings()
         await self.db.put_settings(runtime_payload(self.config))
         if patch.agent:
             self.logger.info(
@@ -249,6 +363,7 @@ class Runtime:
         return self.config
 
     async def close(self) -> None:
+        await self.cron.stop()
         await self.napcat.aclose()
         await self.db.close()
         await self.redis.close()

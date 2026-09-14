@@ -12,7 +12,14 @@ from pydantic import BaseModel
 
 from app.auth import require_admin
 from app.runtime import Runtime
-from msg.schema import ChatRequest, ConfigUpdate, IdentityUpdate, InboundMessage, PersonaUpdate
+from msg.schema import (
+    ChatRequest,
+    ConfigUpdate,
+    IdentityUpdate,
+    InboundMessage,
+    PersonaUpdate,
+    VoiceExamplesUpdate,
+)
 from interface.platform.napcat import parse_onebot_event
 from interface.platform.napcat_api import (
     ACTION_CATALOG,
@@ -80,6 +87,7 @@ def create_app() -> FastAPI:
     async def get_config(request: Request):
         require_admin(request)
         runtime = get_runtime(request)
+        runtime.sync_disk_settings()
         return {
             "ok": True,
             "config": runtime.config.public_dict(),
@@ -97,6 +105,7 @@ def create_app() -> FastAPI:
     async def get_persona(request: Request):
         require_admin(request)
         runtime = get_runtime(request)
+        runtime.sync_disk_settings()
         return {"ok": True, "persona": runtime.config.persona.model_dump()}
 
     @app.put("/api/persona")
@@ -110,6 +119,7 @@ def create_app() -> FastAPI:
     async def get_identity(request: Request):
         require_admin(request)
         runtime = get_runtime(request)
+        runtime.sync_disk_settings()
         return {"ok": True, "identity": runtime.identity.settings.model_dump()}
 
     @app.put("/api/identity")
@@ -118,6 +128,76 @@ def create_app() -> FastAPI:
         runtime = get_runtime(request)
         saved = runtime.apply_identity(payload)
         return {"ok": True, "identity": saved.model_dump()}
+
+    @app.get("/api/examples")
+    async def get_examples(request: Request):
+        require_admin(request)
+        from core.voice_examples import MODES, RELATIONS, SCENES, example_to_dict, load_examples
+
+        items = [example_to_dict(item) for item in load_examples()]
+        return {
+            "ok": True,
+            "examples": items,
+            "scenes": list(SCENES),
+            "modes": list(MODES),
+            "relations": list(RELATIONS),
+        }
+
+    @app.put("/api/examples")
+    async def put_examples(payload: VoiceExamplesUpdate, request: Request):
+        require_admin(request)
+        from core.voice_examples import (
+            MODES,
+            RELATIONS,
+            SCENES,
+            example_to_dict,
+            parse_example_payload,
+            save_examples,
+        )
+
+        parsed = []
+        for index, item in enumerate(payload.examples):
+            data = item.model_dump()
+            if not str(data.get("good") or "").strip():
+                continue
+            try:
+                parsed.append(parse_example_payload(data, index=index))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        saved = save_examples(parsed)
+        return {
+            "ok": True,
+            "examples": [example_to_dict(item) for item in saved],
+            "scenes": list(SCENES),
+            "modes": list(MODES),
+            "relations": list(RELATIONS),
+        }
+
+    @app.get("/api/profiles")
+    async def list_profiles(request: Request, limit: int = Query(default=100, ge=1, le=300)):
+        require_admin(request)
+        runtime = get_runtime(request)
+        from core.group_context.profile import serialize_profile_row
+
+        rows = []
+        if hasattr(runtime.db, "list_user_profiles"):
+            rows = await runtime.db.list_user_profiles(limit=limit)
+        return {"ok": True, "profiles": [serialize_profile_row(row) for row in rows]}
+
+    @app.delete("/api/profiles")
+    async def delete_profile(
+        request: Request,
+        platform: str = Query(default=""),
+        chat_id: str = Query(default=""),
+        user_id: str = Query(default=""),
+    ):
+        require_admin(request)
+        if not platform.strip() or not user_id.strip():
+            raise HTTPException(status_code=400, detail="platform and user_id required")
+        runtime = get_runtime(request)
+        if hasattr(runtime.db, "clear_user_profile"):
+            await runtime.db.clear_user_profile(platform, chat_id, user_id)
+        return {"ok": True}
 
     @app.get("/api/platforms")
     async def get_platforms(request: Request):

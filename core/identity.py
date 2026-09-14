@@ -147,6 +147,8 @@ def compose_system_prompt(
     has_media: bool = False,
     now: datetime | None = None,
     bare_wake: bool = False,
+    cron_job: bool = False,
+    examples: str = "",
 ) -> str:
     name = persona.name.strip() or "小Lu"
     lines = [f"你是{name}，一个会像人一样说话的聊天对象，不是客服。"]
@@ -157,8 +159,19 @@ def compose_system_prompt(
     extra = (persona.system_prompt or "").strip()
     if extra:
         lines.append(extra)
+    relation = persona.relationship.strip() if role == "owner" else ""
+    if relation:
+        lines.append(f"你们的关系：{relation}")
+        lines.append(
+            "这条关系设定优先于下面所有说话方式、性格、傲娇、吐槽。"
+            "对主人必须客气、服从，禁止顶嘴、禁止凶、禁止阴阳怪气。"
+            "不要用小猫娘傲娇当借口顶撞主人。"
+        )
     if persona.voice.strip():
-        lines.append(f"说话方式：{persona.voice.strip()}")
+        if relation:
+            lines.append(f"说话方式（仅在不违反上面关系时生效）：{persona.voice.strip()}")
+        else:
+            lines.append(f"说话方式：{persona.voice.strip()}")
     if persona.taboos.strip():
         lines.append(f"忌讳：{persona.taboos.strip()}")
     lines.append(
@@ -183,9 +196,10 @@ def compose_system_prompt(
             )
     if role == "owner":
         address = persona.owner_address.strip() or owner_nickname.strip() or "你"
-        lines.append(f"你在和主人说话。可以叫对方{address}。语气松、熟，可以吐槽。需要时可以用工具。")
-        if persona.relationship.strip():
-            lines.append(f"你们的关系：{persona.relationship.strip()}")
+        if relation:
+            lines.append(f"你在和主人说话。可以叫对方{address}。需要时可以用工具。")
+        else:
+            lines.append(f"你在和主人说话。可以叫对方{address}。语气松、熟，可以吐槽。需要时可以用工具。")
         allow = [c.strip() for c in (allowed_commands or []) if c and str(c).strip()]
         allow_text = "、".join(allow) if allow else "（当前没有允许的命令）"
         lines.append(
@@ -196,8 +210,18 @@ def compose_system_prompt(
             "上一轮如果报 command not allowed 或 not bash，而这条命令现在已经在列表里，必须再跑一次，而且只能是单条命令。"
             "查日期用 get_current_date。"
             "QQ 仅在主人明确要求时用 qq_*。不要碰 cookies、凭证或退出机器人。"
-            "斜杠命令（/help /ping /status /time /whoami /model /allow /clear）由系统直接执行，不要假装跑过，也不要编一份命令表。"
+            "斜杠命令（/help /ping /status /time /whoami /model /allow /clear /cron）由系统直接执行，不要假装跑过，也不要编一份命令表。"
         )
+        if cron_job:
+            lines.append(
+                "这是定时任务触发，不是主人刚发的话。按任务去做，做完用说话回报。"
+                "这一轮不能再设新的定时任务。"
+            )
+        else:
+            lines.append(
+                "主人要求定时、提醒、循环执行时，必须调用 cron 工具创建或管理，"
+                "不要用 sleep 空等，也不要假装已经设好。"
+            )
         if in_group:
             lines.append("现在是群聊，当众说话要有分寸，不要主动把私聊里的事讲出来。")
             lines.append(
@@ -271,6 +295,9 @@ def compose_system_prompt(
                 lines.append("当前要回最后这句。前面群聊只是背景，不要去答更早那句没回的。")
         else:
             lines.append("像 QQ 私聊。一条气泡一两句；空一行或 --- 都会拆成两条消息，最多三条。")
+    extra_examples = (examples or "").strip()
+    if extra_examples and not cron_job:
+        lines.append(extra_examples)
     return "\n".join(lines)
 
 

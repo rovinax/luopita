@@ -96,3 +96,17 @@ class IdentityUpdate(BaseModel):
     group_chime_cooldown_sec: int | None = None
     group_engage_sec: int | None = None
     group_engage_replies: int | None = None
+
+
+class VoiceExampleIn(BaseModel):
+    id: str = ""
+    scene: str
+    mode: str
+    relation: str
+    input: str = ""
+    good: str = ""
+    bad: str = ""
+
+
+class VoiceExamplesUpdate(BaseModel):
+    examples: list[VoiceExampleIn] = Field(default_factory=list)

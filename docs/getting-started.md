@@ -36,3 +36,5 @@ uv run python -m unittest discover -s tests -p "test_*.py"
 ## 下一步
 
 要接真实 QQ / 生产部署，见 [部署教程](deploy.md)。
+
+主人可用 `/cron` 管理定时任务（`/cron add 20m 提醒喝水`），或直接说「每天早上八点查天气」。到期后会自己跑一轮再回原会话。只有主人能设。

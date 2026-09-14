@@ -37,6 +37,9 @@ class Database(Protocol):
     async def put_settings(self, data: dict[str, Any]) -> None: ...
     async def put_memory(self, user_id: str, content: str) -> None: ...
     async def search_memory(self, user_id: str, query: str, limit: int = 5) -> list[str]: ...
+    async def clear_session_messages(self, session_id: str) -> None: ...
+    async def clear_user_memory(self, user_id: str) -> None: ...
+    async def session_ids_for_user(self, user_id: str, *, platform: str = "") -> list[str]: ...
     async def append_group_event(
         self,
         *,
@@ -54,6 +57,17 @@ class Database(Protocol):
     async def load_group_recent(
         self, platform: str, chat_id: str, limit: int = 30
     ) -> list[dict[str, Any]]: ...
+    async def put_cron_job(self, job: dict[str, Any]) -> None: ...
+    async def get_cron_job(self, job_id: str) -> dict[str, Any] | None: ...
+    async def list_cron_jobs(
+        self,
+        *,
+        user_id: str = "",
+        platform: str = "",
+        enabled: bool | None = None,
+    ) -> list[dict[str, Any]]: ...
+    async def delete_cron_job(self, job_id: str) -> bool: ...
+    async def due_cron_jobs(self, now_iso: str, limit: int = 20) -> list[dict[str, Any]]: ...
 
 
 class InMemoryDatabase:
@@ -66,9 +80,10 @@ class InMemoryDatabase:
         self.group_shards: dict[str, dict[str, Any]] = {}
         self.shard_summaries: dict[str, str] = {}
         self.shard_turns: dict[str, list[dict[str, Any]]] = {}
-        self.user_profiles: dict[tuple[str, str], dict[str, Any]] = {}
+        self.user_profiles: dict[tuple[str, str, str], dict[str, Any]] = {}
         self._msg_shard: dict[tuple[str, str, str], str] = {}
         self._user_active: dict[tuple[str, str, str], str] = {}
+        self.cron_jobs: dict[str, dict[str, Any]] = {}
 
     async def init(self) -> None:
         return None
@@ -184,6 +199,24 @@ class InMemoryDatabase:
             ranked = rows
         return [r["content"] for r in ranked[-limit:]][::-1]
 
+    async def clear_session_messages(self, session_id: str) -> None:
+        self.messages[session_id] = []
+
+    async def clear_user_memory(self, user_id: str) -> None:
+        self.memories.pop(user_id, None)
+
+    async def session_ids_for_user(self, user_id: str, *, platform: str = "") -> list[str]:
+        uid = (user_id or "").strip()
+        plat = (platform or "").strip().lower()
+        out = []
+        for row in self.sessions.values():
+            if str(row.get("user_id") or "") != uid:
+                continue
+            if plat and str(row.get("platform") or "").lower() != plat:
+                continue
+            out.append(str(row.get("session_id") or ""))
+        return [sid for sid in out if sid]
+
     def _group_key(self, platform: str, chat_id: str) -> str:
         return f"{platform}:{chat_id}"
 
@@ -277,6 +310,21 @@ class InMemoryDatabase:
     async def get_user_active_shard(self, platform: str, chat_id: str, user_id: str) -> str:
         return self._user_active.get((platform, chat_id, user_id), "")
 
+    async def clear_user_group_shards(self, platform: str, chat_id: str, user_id: str) -> list[str]:
+        self._user_active.pop((platform, chat_id, user_id), None)
+        removed: list[str] = []
+        for shard_id, row in list(self.group_shards.items()):
+            if (
+                str(row.get("platform") or "") == platform
+                and str(row.get("chat_id") or "") == chat_id
+                and str(row.get("user_id") or "") == user_id
+            ):
+                removed.append(shard_id)
+                self.group_shards.pop(shard_id, None)
+                self.shard_summaries.pop(shard_id, None)
+                self.shard_turns.pop(shard_id, None)
+        return removed
+
     async def shard_for_message(self, platform: str, chat_id: str, message_id: str) -> str:
         mid = (message_id or "").strip()
         if not mid:
@@ -316,26 +364,46 @@ class InMemoryDatabase:
         rows = self.shard_turns.get(shard_id, [])
         return list(rows[-max(1, limit) :])
 
-    async def get_user_profile(self, platform: str, user_id: str) -> dict[str, Any] | None:
-        return self.user_profiles.get((platform, user_id))
+    async def get_user_profile(
+        self, platform: str, user_id: str, chat_id: str = ""
+    ) -> dict[str, Any] | None:
+        row = self.user_profiles.get((platform, chat_id, user_id))
+        return dict(row) if row else None
 
     async def put_user_profile(
         self,
         *,
         platform: str,
         user_id: str,
+        chat_id: str = "",
         display_name: str = "",
         preferences: str = "",
         notes: str = "",
+        card: dict[str, Any] | None = None,
     ) -> None:
-        self.user_profiles[(platform, user_id)] = {
+        key = (platform, chat_id, user_id)
+        existing = self.user_profiles.get(key) or {}
+        stored_card = card if card is not None else existing.get("card") or {}
+        if not isinstance(stored_card, dict):
+            stored_card = {}
+        self.user_profiles[key] = {
             "platform": platform,
+            "chat_id": chat_id,
             "user_id": user_id,
-            "display_name": display_name,
-            "preferences": preferences,
-            "notes": notes,
+            "display_name": display_name or str(existing.get("display_name") or ""),
+            "preferences": preferences if preferences else str(existing.get("preferences") or ""),
+            "notes": notes if notes else str(existing.get("notes") or ""),
+            "card": dict(stored_card),
             "updated_at": utc_now(),
         }
+
+    async def clear_user_profile(self, platform: str, chat_id: str, user_id: str) -> None:
+        self.user_profiles.pop((platform, chat_id, user_id), None)
+
+    async def list_user_profiles(self, limit: int = 100) -> list[dict[str, Any]]:
+        items = [dict(row) for row in self.user_profiles.values()]
+        items.sort(key=lambda row: str(row.get("updated_at") or ""), reverse=True)
+        return items[: max(1, int(limit or 100))]
 
     async def search_group_memory(
         self,
@@ -355,6 +423,55 @@ class InMemoryDatabase:
             scored.append((cosine_similarity(query_embedding, emb), row))
         scored.sort(key=lambda item: item[0], reverse=True)
         return [dict(row) for score, row in scored[:limit] if score > 0.05]
+
+    async def put_cron_job(self, job: dict[str, Any]) -> None:
+        job_id = str(job.get("id") or "").strip()
+        if not job_id:
+            raise ValueError("cron job id required")
+        self.cron_jobs[job_id] = dict(job)
+
+    async def get_cron_job(self, job_id: str) -> dict[str, Any] | None:
+        row = self.cron_jobs.get((job_id or "").strip())
+        return dict(row) if row else None
+
+    async def list_cron_jobs(
+        self,
+        *,
+        user_id: str = "",
+        platform: str = "",
+        enabled: bool | None = None,
+    ) -> list[dict[str, Any]]:
+        items = []
+        for row in self.cron_jobs.values():
+            if user_id and str(row.get("user_id") or "") != user_id:
+                continue
+            if platform and str(row.get("platform") or "") != platform:
+                continue
+            if enabled is not None and bool(row.get("enabled")) != bool(enabled):
+                continue
+            items.append(dict(row))
+        items.sort(key=lambda r: str(r.get("next_run_at") or ""))
+        return items
+
+    async def delete_cron_job(self, job_id: str) -> bool:
+        return self.cron_jobs.pop((job_id or "").strip(), None) is not None
+
+    async def due_cron_jobs(self, now_iso: str, limit: int = 20) -> list[dict[str, Any]]:
+        from core.clock import parse_created_at
+
+        now = parse_created_at(now_iso)
+        items = []
+        for row in self.cron_jobs.values():
+            if not row.get("enabled"):
+                continue
+            due = parse_created_at(row.get("next_run_at"))
+            if due is None:
+                continue
+            if now is not None and due > now:
+                continue
+            items.append(dict(row))
+        items.sort(key=lambda r: str(r.get("next_run_at") or ""))
+        return items[: max(1, limit)]
 
 
 _INIT_SQL = """
@@ -418,12 +535,14 @@ CREATE TABLE IF NOT EXISTS shard_summaries (
 );
 CREATE TABLE IF NOT EXISTS user_profiles (
     platform TEXT NOT NULL,
+    chat_id TEXT NOT NULL DEFAULT '',
     user_id TEXT NOT NULL,
     display_name TEXT NOT NULL DEFAULT '',
     preferences TEXT NOT NULL DEFAULT '',
     notes TEXT NOT NULL DEFAULT '',
+    card JSONB NOT NULL DEFAULT '{}'::jsonb,
     updated_at TIMESTAMPTZ DEFAULT now(),
-    PRIMARY KEY (platform, user_id)
+    PRIMARY KEY (platform, chat_id, user_id)
 );
 CREATE TABLE IF NOT EXISTS shard_turns (
     id BIGSERIAL PRIMARY KEY,
@@ -436,6 +555,29 @@ CREATE TABLE IF NOT EXISTS shard_turns (
     created_at TIMESTAMPTZ DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_shard_turns_shard ON shard_turns(shard_id, id);
+CREATE TABLE IF NOT EXISTS cron_jobs (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL DEFAULT '',
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    kind TEXT NOT NULL,
+    schedule TEXT NOT NULL,
+    tz TEXT NOT NULL DEFAULT 'Asia/Shanghai',
+    prompt TEXT NOT NULL DEFAULT '',
+    platform TEXT NOT NULL DEFAULT '',
+    channel_type TEXT NOT NULL DEFAULT '',
+    chat_id TEXT NOT NULL DEFAULT '',
+    user_id TEXT NOT NULL DEFAULT '',
+    delete_after_run BOOLEAN NOT NULL DEFAULT FALSE,
+    next_run_at TIMESTAMPTZ,
+    last_run_at TIMESTAMPTZ,
+    last_status TEXT NOT NULL DEFAULT '',
+    last_error TEXT NOT NULL DEFAULT '',
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cron_jobs_next ON cron_jobs(enabled, next_run_at);
+CREATE INDEX IF NOT EXISTS idx_cron_jobs_owner ON cron_jobs(platform, user_id);
 """
 
 
@@ -475,6 +617,19 @@ class PostgresDatabase:
                 pass
             try:
                 await conn.execute("ALTER TABLE group_events ADD COLUMN IF NOT EXISTS embedding vector(1536)")
+            except Exception:
+                pass
+            await conn.execute(
+                "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS chat_id TEXT NOT NULL DEFAULT ''"
+            )
+            await conn.execute(
+                "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS card JSONB NOT NULL DEFAULT '{}'::jsonb"
+            )
+            try:
+                await conn.execute("ALTER TABLE user_profiles DROP CONSTRAINT IF EXISTS user_profiles_pkey")
+                await conn.execute(
+                    "ALTER TABLE user_profiles ADD PRIMARY KEY (platform, chat_id, user_id)"
+                )
             except Exception:
                 pass
             await conn.execute(
@@ -689,6 +844,38 @@ class PostgresDatabase:
                 rows = await cur.fetchall()
         return [r["content"] for r in rows]
 
+    async def clear_session_messages(self, session_id: str) -> None:
+        if not self.pool or not session_id:
+            return
+        async with self.pool.connection() as conn:
+            async with conn.transaction():
+                await conn.execute("DELETE FROM messages WHERE session_id = %s", (session_id,))
+
+    async def clear_user_memory(self, user_id: str) -> None:
+        if not self.pool or not user_id:
+            return
+        async with self.pool.connection() as conn:
+            async with conn.transaction():
+                await conn.execute("DELETE FROM long_term_memories WHERE user_id = %s", (user_id,))
+
+    async def session_ids_for_user(self, user_id: str, *, platform: str = "") -> list[str]:
+        if not self.pool or not user_id:
+            return []
+        plat = (platform or "").strip().lower()
+        async with self.pool.connection() as conn:
+            if plat:
+                cur = await conn.execute(
+                    "SELECT session_id FROM sessions WHERE user_id = %s AND platform = %s",
+                    (user_id, plat),
+                )
+            else:
+                cur = await conn.execute(
+                    "SELECT session_id FROM sessions WHERE user_id = %s",
+                    (user_id,),
+                )
+            rows = await cur.fetchall()
+        return [str(r["session_id"]) for r in rows if r.get("session_id")]
+
     async def append_group_event(
         self,
         *,
@@ -860,6 +1047,22 @@ class PostgresDatabase:
             row = await cur.fetchone()
         return str(row["shard_id"]) if row else ""
 
+    async def clear_user_group_shards(self, platform: str, chat_id: str, user_id: str) -> list[str]:
+        if not self.pool or not platform or not chat_id or not user_id:
+            return []
+        async with self.pool.connection() as conn:
+            async with conn.transaction():
+                cur = await conn.execute(
+                    """
+                    DELETE FROM group_shards
+                    WHERE platform = %s AND chat_id = %s AND user_id = %s
+                    RETURNING shard_id
+                    """,
+                    (platform, chat_id, user_id),
+                )
+                rows = await cur.fetchall()
+        return [str(r["shard_id"]) for r in rows if r.get("shard_id")]
+
     async def shard_for_message(self, platform: str, chat_id: str, message_id: str) -> str:
         mid = (message_id or "").strip()
         if not mid:
@@ -963,43 +1166,100 @@ class PostgresDatabase:
             out.append(item)
         return out
 
-    async def get_user_profile(self, platform: str, user_id: str) -> dict[str, Any] | None:
+    async def get_user_profile(
+        self, platform: str, user_id: str, chat_id: str = ""
+    ) -> dict[str, Any] | None:
         assert self.pool is not None
         async with self.pool.connection() as conn:
             cur = await conn.execute(
                 """
-                SELECT platform, user_id, display_name, preferences, notes, updated_at
-                FROM user_profiles WHERE platform = %s AND user_id = %s
+                SELECT platform, chat_id, user_id, display_name, preferences, notes, card, updated_at
+                FROM user_profiles WHERE platform = %s AND chat_id = %s AND user_id = %s
                 """,
-                (platform, user_id),
+                (platform, chat_id, user_id),
             )
             row = await cur.fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        item = dict(row)
+        item["updated_at"] = str(item.get("updated_at") or "")
+        card = item.get("card")
+        if not isinstance(card, dict):
+            item["card"] = {}
+        return item
 
     async def put_user_profile(
         self,
         *,
         platform: str,
         user_id: str,
+        chat_id: str = "",
         display_name: str = "",
         preferences: str = "",
         notes: str = "",
+        card: dict[str, Any] | None = None,
     ) -> None:
         assert self.pool is not None
+        payload = json.dumps(card if isinstance(card, dict) else {}, ensure_ascii=False)
         async with self.pool.connection() as conn:
             await conn.execute(
                 """
-                INSERT INTO user_profiles(platform, user_id, display_name, preferences, notes, updated_at)
-                VALUES (%s, %s, %s, %s, %s, now())
-                ON CONFLICT (platform, user_id) DO UPDATE SET
+                INSERT INTO user_profiles(platform, chat_id, user_id, display_name, preferences, notes, card, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, now())
+                ON CONFLICT (platform, chat_id, user_id) DO UPDATE SET
                     display_name = COALESCE(NULLIF(EXCLUDED.display_name, ''), user_profiles.display_name),
                     preferences = COALESCE(NULLIF(EXCLUDED.preferences, ''), user_profiles.preferences),
                     notes = COALESCE(NULLIF(EXCLUDED.notes, ''), user_profiles.notes),
+                    card = CASE
+                        WHEN %s THEN user_profiles.card
+                        ELSE EXCLUDED.card
+                    END,
                     updated_at = now()
                 """,
-                (platform, user_id, display_name, preferences, notes),
+                (
+                    platform,
+                    chat_id,
+                    user_id,
+                    display_name,
+                    preferences,
+                    notes,
+                    payload,
+                    card is None,
+                ),
             )
             await conn.commit()
+
+    async def clear_user_profile(self, platform: str, chat_id: str, user_id: str) -> None:
+        if not self.pool or not platform or not user_id:
+            return
+        async with self.pool.connection() as conn:
+            await conn.execute(
+                "DELETE FROM user_profiles WHERE platform = %s AND chat_id = %s AND user_id = %s",
+                (platform, chat_id, user_id),
+            )
+            await conn.commit()
+
+    async def list_user_profiles(self, limit: int = 100) -> list[dict[str, Any]]:
+        assert self.pool is not None
+        async with self.pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                SELECT platform, chat_id, user_id, display_name, preferences, notes, card, updated_at
+                FROM user_profiles
+                ORDER BY updated_at DESC
+                LIMIT %s
+                """,
+                (max(1, int(limit or 100)),),
+            )
+            rows = await cur.fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["updated_at"] = str(item.get("updated_at") or "")
+            if not isinstance(item.get("card"), dict):
+                item["card"] = {}
+            out.append(item)
+        return out
 
     async def search_group_memory(
         self,
@@ -1050,6 +1310,163 @@ class PostgresDatabase:
             item["media"] = list(raw_media or [])
             out.append(item)
         return out
+
+    async def put_cron_job(self, job: dict[str, Any]) -> None:
+        job_id = str(job.get("id") or "").strip()
+        if not job_id:
+            raise ValueError("cron job id required")
+        assert self.pool is not None
+        async with self.pool.connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO cron_jobs(
+                    id, name, enabled, kind, schedule, tz, prompt,
+                    platform, channel_type, chat_id, user_id, delete_after_run,
+                    next_run_at, last_run_at, last_status, last_error,
+                    consecutive_failures, created_at, updated_at
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    enabled = EXCLUDED.enabled,
+                    kind = EXCLUDED.kind,
+                    schedule = EXCLUDED.schedule,
+                    tz = EXCLUDED.tz,
+                    prompt = EXCLUDED.prompt,
+                    platform = EXCLUDED.platform,
+                    channel_type = EXCLUDED.channel_type,
+                    chat_id = EXCLUDED.chat_id,
+                    user_id = EXCLUDED.user_id,
+                    delete_after_run = EXCLUDED.delete_after_run,
+                    next_run_at = EXCLUDED.next_run_at,
+                    last_run_at = EXCLUDED.last_run_at,
+                    last_status = EXCLUDED.last_status,
+                    last_error = EXCLUDED.last_error,
+                    consecutive_failures = EXCLUDED.consecutive_failures,
+                    updated_at = EXCLUDED.updated_at
+                """,
+                (
+                    job_id,
+                    str(job.get("name") or ""),
+                    bool(job.get("enabled", True)),
+                    str(job.get("kind") or "at"),
+                    str(job.get("schedule") or ""),
+                    str(job.get("tz") or "Asia/Shanghai"),
+                    str(job.get("prompt") or ""),
+                    str(job.get("platform") or ""),
+                    str(job.get("channel_type") or ""),
+                    str(job.get("chat_id") or ""),
+                    str(job.get("user_id") or ""),
+                    bool(job.get("delete_after_run", False)),
+                    _cron_ts(job.get("next_run_at")),
+                    _cron_ts(job.get("last_run_at")),
+                    str(job.get("last_status") or ""),
+                    str(job.get("last_error") or ""),
+                    int(job.get("consecutive_failures") or 0),
+                    _cron_ts(job.get("created_at")),
+                    _cron_ts(job.get("updated_at")),
+                ),
+            )
+            await conn.commit()
+
+    async def get_cron_job(self, job_id: str) -> dict[str, Any] | None:
+        sid = (job_id or "").strip()
+        if not sid:
+            return None
+        assert self.pool is not None
+        async with self.pool.connection() as conn:
+            cur = await conn.execute("SELECT * FROM cron_jobs WHERE id = %s", (sid,))
+            row = await cur.fetchone()
+        return _cron_row(row) if row else None
+
+    async def list_cron_jobs(
+        self,
+        *,
+        user_id: str = "",
+        platform: str = "",
+        enabled: bool | None = None,
+    ) -> list[dict[str, Any]]:
+        assert self.pool is not None
+        clauses = ["TRUE"]
+        params: list[Any] = []
+        if user_id:
+            clauses.append("user_id = %s")
+            params.append(user_id)
+        if platform:
+            clauses.append("platform = %s")
+            params.append(platform)
+        if enabled is not None:
+            clauses.append("enabled = %s")
+            params.append(bool(enabled))
+        sql = f"""
+            SELECT * FROM cron_jobs
+            WHERE {' AND '.join(clauses)}
+            ORDER BY next_run_at NULLS LAST, id
+        """
+        async with self.pool.connection() as conn:
+            cur = await conn.execute(sql, tuple(params))
+            rows = await cur.fetchall()
+        return [_cron_row(row) for row in rows if row]
+
+    async def delete_cron_job(self, job_id: str) -> bool:
+        sid = (job_id or "").strip()
+        if not sid:
+            return False
+        assert self.pool is not None
+        async with self.pool.connection() as conn:
+            cur = await conn.execute(
+                "DELETE FROM cron_jobs WHERE id = %s RETURNING id",
+                (sid,),
+            )
+            row = await cur.fetchone()
+            await conn.commit()
+        return bool(row)
+
+    async def due_cron_jobs(self, now_iso: str, limit: int = 20) -> list[dict[str, Any]]:
+        assert self.pool is not None
+        async with self.pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM cron_jobs
+                WHERE enabled = TRUE AND next_run_at IS NOT NULL AND next_run_at <= %s
+                ORDER BY next_run_at ASC
+                LIMIT %s
+                """,
+                (_cron_ts(now_iso), max(1, limit)),
+            )
+            rows = await cur.fetchall()
+        return [_cron_row(row) for row in rows if row]
+
+
+def _cron_ts(value: Any):
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value
+    from core.clock import parse_created_at
+
+    return parse_created_at(value)
+
+
+def _cron_row(row: Any) -> dict[str, Any]:
+    item = dict(row)
+    for key in ("next_run_at", "last_run_at", "created_at", "updated_at"):
+        val = item.get(key)
+        if isinstance(val, datetime):
+            item[key] = val.isoformat()
+        elif val is None:
+            item[key] = ""
+        else:
+            item[key] = str(val)
+    item["enabled"] = bool(item.get("enabled"))
+    item["delete_after_run"] = bool(item.get("delete_after_run"))
+    item["consecutive_failures"] = int(item.get("consecutive_failures") or 0)
+    return item
 
 
 def _vector_literal(values: list[float]) -> str:

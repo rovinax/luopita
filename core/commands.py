@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 
 from core.clock import format_now
+from core.cron.schedule import describe_schedule, format_run_at
+from core.cron.types import CronJob
 from core.group_talk import strip_wake_noise
 
 _CMD_RE = re.compile(r"^/([a-zA-Z0-9_-]+)(?:\s+(.*))?$")
@@ -18,6 +20,7 @@ CATALOG: dict[str, str] = {
     "model": "当前模型",
     "allow": "shell 白名单",
     "clear": "忘掉这轮对话",
+    "cron": "定时任务",
 }
 
 ALIASES: dict[str, str] = {
@@ -31,6 +34,7 @@ ALIASES: dict[str, str] = {
     "reset": "clear",
     "forget": "clear",
     "cmds": "allow",
+    "job": "cron",
 }
 
 
@@ -122,3 +126,66 @@ def render_status(
 
 def render_cleared() -> str:
     return "这轮对话我忘掉了。"
+
+
+def render_cron_usage() -> str:
+    return (
+        "主人定时任务：\n"
+        "/cron  列表\n"
+        "/cron add 20m 提醒喝水\n"
+        "/cron add every 1h 查天气\n"
+        "/cron add 每天8:00 早安\n"
+        "/cron get <id>\n"
+        "/cron on|off <id>\n"
+        "/cron run <id>\n"
+        "/cron rm <id>"
+    )
+
+
+def render_cron_missing() -> str:
+    return "没有这个任务。"
+
+
+def render_cron_empty() -> str:
+    return "还没有定时任务。/cron add 20m 提醒喝水"
+
+
+def render_cron_job(job: CronJob) -> str:
+    flag = "开" if job.enabled else "停"
+    when = describe_schedule(job.kind, job.schedule)
+    nxt = format_run_at(job.next_run_at)
+    name = job.name.strip()
+    title = f"{job.id}  {flag}  {when}"
+    if name and name != (job.prompt or "")[:24]:
+        title = f"{title}  {name}"
+    lines = [title, f"下次 {nxt}", (job.prompt or "").strip() or "（没有内容）"]
+    if job.last_status:
+        extra = job.last_status
+        if job.last_error:
+            extra = f"{extra} · {job.last_error}"
+        lines.append(f"上次 {extra}")
+    return "\n".join(lines)
+
+
+def render_cron_list(jobs: list[CronJob]) -> str:
+    if not jobs:
+        return render_cron_empty()
+    return "\n\n".join(render_cron_job(job) for job in jobs)
+
+
+def render_cron_added(job: CronJob) -> str:
+    return "记下了。\n" + render_cron_job(job)
+
+
+def render_cron_removed(job_id: str) -> str:
+    return f"删掉了 `{job_id}`。"
+
+
+def render_cron_ran(job: CronJob | None, job_id: str) -> str:
+    if job is None:
+        return f"`{job_id}` 已经跑完并清掉了。"
+    return "立刻跑了一轮。\n" + render_cron_job(job)
+
+
+def render_cron_error(message: str) -> str:
+    return (message or "").strip() or "设不了。"

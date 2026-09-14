@@ -51,9 +51,42 @@ def user_active_key(platform: str, chat_id: str, user_id: str) -> str:
     return f"user_active:{platform}:{chat_id}:{user_id}"
 
 
+def cleared_at_key(platform: str, chat_id: str, user_id: str) -> str:
+    return f"cleared:{platform}:{chat_id}:{user_id}"
+
+
+def event_epoch(event: dict[str, Any]) -> float:
+    raw = event.get("created_at")
+    if raw is None:
+        return 0.0
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    text = str(raw).strip()
+    if not text:
+        return 0.0
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    try:
+        from datetime import datetime
+
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+
 def shard_session_key(platform: str, chat_id: str, shard_id: str) -> str:
     """LangGraph thread_id for a group shard."""
     return f"{platform}:group:{chat_id}:shard:{shard_id}"
+
+
+def shard_id_from_session_key(session_id: str) -> str:
+    marker = ":shard:"
+    raw = session_id or ""
+    if marker not in raw:
+        return ""
+    return raw.rsplit(marker, 1)[-1].strip()
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:

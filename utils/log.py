@@ -33,6 +33,12 @@ class ChatbotLogger:
             cls._instance.logger.addHandler(file_handler)
         return cls._instance
 
+    def set_level(self, log_level: str) -> None:
+        level = getattr(logging, (log_level or "INFO").upper(), logging.INFO)
+        self._instance.logger.setLevel(level)
+        for handler in self._instance.logger.handlers:
+            handler.setLevel(level)
+
     def info(self, message):
         self._instance.logger.info(message)
     

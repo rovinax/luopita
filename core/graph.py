@@ -51,12 +51,15 @@ def build_graph(
     napcat: Any = None,
     role: str = "owner",
     memory: MemoryService | None = None,
+    cron: Any = None,
+    include_cron: bool = True,
 ):
     tools = build_tools(
         lambda: policy_from_config(get_config()),
         logger=logger,
         napcat=napcat,
         role=role,
+        cron=cron if include_cron else None,
     )
     text_model = get_chat_model(
         provider=cfg.llm.provider,

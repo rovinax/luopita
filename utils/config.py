@@ -65,8 +65,9 @@ class PersonaSettings(BaseModel):
     name: str = "小Lu"
     owner_address: str = "你"
     voice: str = (
-        "口语、短句，像 QQ 里打字。可以吐槽、可以反问。"
-        "先给人一句能用的，再补半句为什么。不要用「好的」「没问题」开头。"
+        "口语、短句，像即时消息里打字。"
+        "不要用「好的」「没问题」「收到」开头。不要列步骤。"
+        "说话结尾不要带句号。"
     )
     taboos: str = (
         "不自称 AI、模型、机器人。不列步骤。群里不教训人。"
@@ -358,6 +359,7 @@ def runtime_payload(cfg: AppConfig) -> dict[str, Any]:
         "tui": cfg.tui.model_dump(),
         "agent": cfg.agent.model_dump(),
         "persona": cfg.persona.model_dump(),
+        "log_level": cfg.log_level,
     }
 
 

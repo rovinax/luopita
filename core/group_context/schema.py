@@ -23,12 +23,14 @@ CREATE TABLE IF NOT EXISTS shard_summaries (
 );
 CREATE TABLE IF NOT EXISTS user_profiles (
     platform TEXT NOT NULL,
+    chat_id TEXT NOT NULL DEFAULT '',
     user_id TEXT NOT NULL,
     display_name TEXT NOT NULL DEFAULT '',
     preferences TEXT NOT NULL DEFAULT '',
     notes TEXT NOT NULL DEFAULT '',
+    card JSONB NOT NULL DEFAULT '{}'::jsonb,
     updated_at TIMESTAMPTZ DEFAULT now(),
-    PRIMARY KEY (platform, user_id)
+    PRIMARY KEY (platform, chat_id, user_id)
 );
 CREATE TABLE IF NOT EXISTS shard_turns (
     id BIGSERIAL PRIMARY KEY,

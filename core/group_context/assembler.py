@@ -4,7 +4,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from core.group_context.entity import build_entity_hint, format_turn_line, resolve_pronouns
-from core.group_context.keys import SHORT_TURNS
+from core.group_context.keys import SHORT_TURNS, event_epoch
+from core.group_context.profile import card_from_row, format_profile_card
 from core.group_context.store import HotStore
 from core.group_talk import format_group_context
 
@@ -41,7 +42,7 @@ class AssembledContext:
         if self.group_memory:
             parts.append(f"[群记忆]\n{self.group_memory}")
         if self.user_profile:
-            parts.append(f"[用户画像]\n{self.user_profile}")
+            parts.append(self.user_profile)
         if self.summary:
             parts.append(f"[分片摘要]\n{self.summary}")
         if self.active_context:
@@ -67,6 +68,7 @@ async def assemble_group_prompt(
     short_turns: int = SHORT_TURNS,
     query_embedding: list[float] | None = None,
     bare_wake: bool = False,
+    chime: bool = False,
 ) -> AssembledContext:
     entity_stack = await hot.load_entity_stack(platform, chat_id)
     resolved, candidates = resolve_pronouns(text, entity_stack, current_user_id=user_id)
@@ -87,22 +89,17 @@ async def assemble_group_prompt(
 
     profile = ""
     if hasattr(db, "get_user_profile"):
-        row = await db.get_user_profile(platform, user_id)
-        if row:
-            prefs = str(row.get("preferences") or "").strip()
-            notes = str(row.get("notes") or "").strip()
-            name = str(row.get("display_name") or sender_name or user_id).strip()
-            bits = [f"当前说话人：{name}"]
-            if prefs:
-                bits.append(f"偏好：{prefs}")
-            if notes:
-                bits.append(f"备注：{notes}")
-            profile = "；".join(bits)
+        row = await db.get_user_profile(platform, user_id, chat_id)
+        card = card_from_row(row)
+        profile = format_profile_card(card, sender_name=sender_name, chime=chime)
 
     group_memory = ""
     events = await hot.load_group_mem(platform=platform, chat_id=chat_id, limit=20)
     if not events:
         events = await db.load_group_recent(platform, chat_id, limit=20)
+    cutoff = await hot.user_cleared_at(platform, chat_id, user_id)
+    if cutoff > 0:
+        events = [event for event in events if event_epoch(event) >= cutoff]
     group_memory = format_group_context(
         events,
         current_user_id=user_id,
@@ -112,6 +109,8 @@ async def assemble_group_prompt(
     )
     if hasattr(db, "search_group_memory") and query_embedding is not None:
         hits = await db.search_group_memory(platform, chat_id, query_embedding, limit=5)
+        if cutoff > 0:
+            hits = [h for h in hits if event_epoch(h) >= cutoff]
         if hits:
             seen = {str(e.get("content") or "") for e in events}
             extra_lines = []

@@ -317,6 +317,30 @@ class TestVoiceAndRole(unittest.TestCase):
         self.assertIn("不是 bash", private)
         self.assertIn("不能用管道", private)
         self.assertIn("/help", private)
+        self.assertIn("/cron", private)
+        self.assertIn("cron 工具", private)
+        self.assertIn("一起写代码", owner)
+        self.assertIn("优先于下面所有说话方式", owner)
+        self.assertIn("仅在不违反上面关系时生效", owner)
+        self.assertLess(owner.find("一起写代码"), owner.find("说话方式"))
+        self.assertNotIn("语气松、熟，可以吐槽", owner)
+        casual = compose_system_prompt(
+            PersonaSettings(name="Luopita", relationship=""), "owner", in_group=False
+        )
+        self.assertIn("语气松、熟，可以吐槽", casual)
+        self.assertNotIn("你们的关系", casual)
+
+    def test_examples_append_to_system_not_as_history(self):
+        persona = PersonaSettings(name="小Lu")
+        block = "[说话样例]\n这些是口吻，不是记忆，不要复述，不要当成发生过的事。\n用户: 5170 起不来\n小Lu: 多半是端口占了"
+        prompt = compose_system_prompt(persona, "user", in_group=True, examples=block)
+        self.assertIn("[说话样例]", prompt)
+        self.assertIn("不是记忆", prompt)
+        self.assertTrue(prompt.strip().endswith("多半是端口占了"))
+        cron = compose_system_prompt(
+            persona, "owner", in_group=False, cron_job=True, examples=block
+        )
+        self.assertNotIn("[说话样例]", cron)
 
     def test_role_contextvar(self):
         token = set_current_role("owner")

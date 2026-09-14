@@ -27,6 +27,7 @@ export type PublicConfig = {
     timeout_sec: number;
     workdir: string;
     command_allowlist: string[];
+    short_term_messages?: number;
   };
   persona: {
     name: string;
@@ -45,6 +46,35 @@ export type IdentityOwner = {
   nickname: string;
 };
 
+export type VoiceExample = {
+  id: string;
+  scene: string;
+  mode: string;
+  relation: string;
+  input: string;
+  good: string;
+  bad: string;
+};
+
+export type SpeakerProfile = {
+  platform: string;
+  chat_id: string;
+  user_id: string;
+  display_name: string;
+  updated_at: string;
+  prompt: string;
+  card: {
+    address: string;
+    familiarity: string;
+    reply_pref: string;
+    stack: string[];
+    taboos: string;
+    recent: string;
+    evidence: string;
+    updated_at: string;
+  };
+};
+
 export type IdentitySettings = {
   owners: IdentityOwner[];
   group_require_at: boolean;
@@ -52,6 +82,8 @@ export type IdentitySettings = {
   group_tech_chance?: number;
   group_chatty_chance?: number;
   group_chime_cooldown_sec?: number;
+  group_engage_sec?: number;
+  group_engage_replies?: number;
 };
 
 const TOKEN_KEY = "luopita_admin_token";
@@ -134,6 +166,37 @@ export const api = {
         headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(body),
       }),
+    ),
+  examples: () =>
+    parse<{
+      ok: boolean;
+      examples: VoiceExample[];
+      scenes: string[];
+      modes: string[];
+      relations: string[];
+    }>(fetch("/api/examples", { headers: authHeaders() })),
+  saveExamples: (examples: VoiceExample[]) =>
+    parse<{
+      ok: boolean;
+      examples: VoiceExample[];
+      scenes: string[];
+      modes: string[];
+      relations: string[];
+    }>(
+      fetch("/api/examples", {
+        method: "PUT",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ examples }),
+      }),
+    ),
+  profiles: () =>
+    parse<{ ok: boolean; profiles: SpeakerProfile[] }>(fetch("/api/profiles", { headers: authHeaders() })),
+  deleteProfile: (platform: string, chat_id: string, user_id: string) =>
+    parse<{ ok: boolean }>(
+      fetch(
+        `/api/profiles?platform=${encodeURIComponent(platform)}&chat_id=${encodeURIComponent(chat_id)}&user_id=${encodeURIComponent(user_id)}`,
+        { method: "DELETE", headers: authHeaders() },
+      ),
     ),
   togglePlatform: (name: string, enabled?: boolean) =>
     parse<{ ok: boolean; platforms: PlatformSnap[] }>(

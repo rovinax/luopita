@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from core.group_context.keys import (
@@ -10,6 +11,7 @@ from core.group_context.keys import (
     GROUP_MEM_MAX,
     GROUP_MEM_TTL_SEC,
     SUMMARY_TTL_SEC,
+    cleared_at_key,
     conv_key,
     entity_key,
     group_mem_key,
@@ -89,6 +91,32 @@ class HotStore:
 
     async def set_active_shard(self, platform: str, chat_id: str, user_id: str, shard_id: str) -> None:
         await self.redis.set(user_active_key(platform, chat_id, user_id), shard_id, CONV_TTL_SEC)
+
+    async def clear_user_context(
+        self,
+        *,
+        platform: str,
+        chat_id: str,
+        user_id: str,
+        shard_ids: list[str],
+    ) -> None:
+        await self.redis.delete(user_active_key(platform, chat_id, user_id))
+        seen: set[str] = set()
+        for raw in shard_ids:
+            shard_id = (raw or "").strip()
+            if not shard_id or shard_id in seen:
+                continue
+            seen.add(shard_id)
+            await self.redis.delete(conv_key(platform, chat_id, user_id, shard_id))
+            await self.redis.delete(summary_key(shard_id))
+        await self.redis.set(cleared_at_key(platform, chat_id, user_id), str(time.time()), GROUP_MEM_TTL_SEC)
+
+    async def user_cleared_at(self, platform: str, chat_id: str, user_id: str) -> float:
+        raw = await self.redis.get(cleared_at_key(platform, chat_id, user_id))
+        try:
+            return float(raw or 0)
+        except (TypeError, ValueError):
+            return 0.0
 
     async def bind_message_shard(self, platform: str, chat_id: str, message_id: str, shard_id: str) -> None:
         mid = (message_id or "").strip()

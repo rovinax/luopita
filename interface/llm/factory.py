@@ -97,7 +97,9 @@ class DeepSeekChatModel(ChatOpenAI):
         return payload
 
 
-def get_chat_model(provider: str, base_url: str, api_key: str, model: str) -> BaseChatModel:
+def get_chat_model(
+    provider: str, base_url: str, api_key: str, model: str, temperature: float | None = None
+) -> BaseChatModel:
     p = (provider or "").strip().lower()
     if p in ("mock", "fake", "offline"):
         return MockChatModel()
@@ -107,7 +109,7 @@ def get_chat_model(provider: str, base_url: str, api_key: str, model: str) -> Ba
         "model": model or "deepseek-chat",
         "api_key": api_key,
         "base_url": base_url or None,
-        "temperature": 0.4,
+        "temperature": 0.4 if temperature is None else temperature,
     }
     if p in ("deepseek", "deepseek-chat", "deepseek_api"):
         return DeepSeekChatModel(**kwargs)

@@ -282,7 +282,17 @@ class TestPipeline(unittest.IsolatedAsyncioTestCase):
 
     async def test_assembled_prompt_sections(self):
         await self.db.put_user_profile(
-            platform="napcat", user_id="1", display_name="Ada", preferences="简洁"
+            platform="napcat",
+            chat_id="9",
+            user_id="1",
+            display_name="Ada",
+            card={
+                "address": "Ada",
+                "familiarity": "peer",
+                "reply_pref": "简洁",
+                "stack": ["docker"],
+                "taboos": "别说教",
+            },
         )
         t = decide_trigger(
             channel_type="group", role="user", group_require_at=True, text="@bot 他刚才说的可行吗", mentioned=True
@@ -302,11 +312,71 @@ class TestPipeline(unittest.IsolatedAsyncioTestCase):
         block = prepared.assembled.as_group_context_block()
         self.assertIn("[说话人隔离]", block)
         self.assertIn("禁止主动续答", block)
-        self.assertIn("[用户画像]", block)
+        self.assertIn("[当前说话人]", block)
         self.assertIn("简洁", block)
+        self.assertIn("docker", block)
+        self.assertNotIn("[用户画像]", block)
         self.assertIn("[当前消息]", block)
         self.assertIn("Bob|2", prepared.assembled.resolved_text)
         self.assertNotIn("[裸唤醒]", block)
+
+    async def test_empty_profile_omitted(self):
+        t = decide_trigger(
+            channel_type="group", role="user", group_require_at=True, text="@bot hi", mentioned=True
+        )
+        prepared = await self.pipeline.prepare_reply(
+            platform="napcat",
+            chat_id="9",
+            user_id="1",
+            sender_name="Ada",
+            text="hi",
+            trigger=t,
+            reply_to_ids=[],
+            bot_id="1001",
+            bot_name="小Lu",
+        )
+        block = prepared.assembled.as_group_context_block()
+        self.assertIn("[说话人隔离]", block)
+        self.assertNotIn("[当前说话人]", block)
+
+    async def test_chime_profile_is_short(self):
+        await self.db.put_user_profile(
+            platform="napcat",
+            chat_id="9",
+            user_id="1",
+            display_name="Ada",
+            card={
+                "address": "Ada",
+                "familiarity": "peer",
+                "reply_pref": "给命令别给教程",
+                "stack": ["postgres"],
+                "taboos": "当众翻旧账",
+            },
+        )
+        t = decide_trigger(
+            channel_type="group",
+            role="user",
+            group_require_at=True,
+            text="@bot redis 连不上",
+            mentioned=True,
+        )
+        prepared = await self.pipeline.prepare_reply(
+            platform="napcat",
+            chat_id="9",
+            user_id="1",
+            sender_name="Ada",
+            text="redis 连不上",
+            trigger=t,
+            reply_to_ids=[],
+            bot_id="1001",
+            bot_name="小Lu",
+            chime=True,
+        )
+        block = prepared.assembled.as_group_context_block()
+        self.assertIn("[当前说话人]", block)
+        self.assertIn("当众翻旧账", block)
+        self.assertNotIn("postgres", block)
+        self.assertNotIn("给命令别给教程", block)
 
     async def test_embedding_similarity_stable(self):
         a = hash_embed("docker compose 起不来 postgres")

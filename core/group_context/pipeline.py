@@ -3,9 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from core.database import utc_now
 from core.group_context.assembler import AssembledContext, assemble_group_prompt
-from core.group_context.compress import maybe_compress_shard
+from core.group_context.compress import maybe_compress_shard, needs_compression
 from core.group_context.keys import hash_embed, turn_payload
+from core.group_context.profile import (
+    EXTRACT_TURN_LIMIT,
+    card_from_row,
+    extract_profile_card,
+    merge_profile,
+    should_refresh,
+)
 from core.group_context.router import ContextRouter, RouteResult
 from core.group_context.store import HotStore
 from core.group_context.trigger import TriggerResult, decide_trigger, extract_trigger_flags, score_against_centroid
@@ -17,6 +25,7 @@ class PipelineResult:
     route: RouteResult | None = None
     assembled: AssembledContext | None = None
     event_id: int | None = None
+    compressed: bool = False
 
 
 class GroupContextPipeline:
@@ -52,6 +61,7 @@ class GroupContextPipeline:
             "message_id": message_id,
             "shard_id": shard_id,
             "media": list(media or []),
+            "created_at": utc_now(),
         }
         await self.hot.append_group_mem(platform=platform, chat_id=chat_id, event=event)
         await self.hot.push_entity(
@@ -160,6 +170,7 @@ class GroupContextPipeline:
         bot_id: str,
         bot_name: str,
         bare_wake: bool = False,
+        chime: bool = False,
     ) -> PipelineResult:
         route = await self.router.route(
             platform=platform,
@@ -174,6 +185,8 @@ class GroupContextPipeline:
             return PipelineResult(trigger=trigger)
 
         locked = await self.hot.with_shard_lock(route.shard_id)
+        did_compress = False
+        assembled = None
         try:
             assembled = await assemble_group_prompt(
                 hot=self.hot,
@@ -187,7 +200,9 @@ class GroupContextPipeline:
                 bot_name=bot_name,
                 query_embedding=route.embedding,
                 bare_wake=bare_wake,
+                chime=chime,
             )
+            did_compress = needs_compression(assembled.turns, bot_name=bot_name)
             summary = await maybe_compress_shard(
                 hot=self.hot,
                 db=self.db,
@@ -201,7 +216,9 @@ class GroupContextPipeline:
             if locked:
                 await self.hot.release_shard_lock(route.shard_id)
 
-        return PipelineResult(trigger=trigger, route=route, assembled=assembled)
+        return PipelineResult(
+            trigger=trigger, route=route, assembled=assembled, compressed=did_compress
+        )
 
     async def write_turn(
         self,
@@ -231,3 +248,48 @@ class GroupContextPipeline:
         )
         if hasattr(self.db, "append_shard_turn"):
             await self.db.append_shard_turn(shard_id=shard_id, turn=turn)
+
+    async def maybe_refresh_profile(
+        self,
+        *,
+        platform: str,
+        chat_id: str,
+        user_id: str,
+        sender_name: str,
+        shard_id: str,
+        bot_name: str = "小Lu",
+        compressed: bool = False,
+        mock: bool = False,
+        llm: Any = None,
+    ) -> Any:
+        if mock or llm is None:
+            return None
+        if not hasattr(self.db, "get_user_profile") or not hasattr(self.db, "put_user_profile"):
+            return None
+        turns = await self.hot.load_turns(
+            platform=platform,
+            chat_id=chat_id,
+            user_id=user_id,
+            shard_id=shard_id,
+            limit=EXTRACT_TURN_LIMIT,
+        )
+        if not turns and hasattr(self.db, "load_shard_turns"):
+            turns = await self.db.load_shard_turns(shard_id, limit=EXTRACT_TURN_LIMIT)
+        row = await self.db.get_user_profile(platform, user_id, chat_id)
+        old = card_from_row(row)
+        if not should_refresh(old, turns, compressed=compressed):
+            return None
+        extracted = await extract_profile_card(
+            turns, sender_name, llm=llm, bot_name=bot_name
+        )
+        if extracted is None:
+            return None
+        merged = merge_profile(old, extracted)
+        await self.db.put_user_profile(
+            platform=platform,
+            chat_id=chat_id,
+            user_id=user_id,
+            display_name=sender_name or merged.address,
+            card=merged.to_dict(),
+        )
+        return merged

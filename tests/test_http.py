@@ -10,6 +10,7 @@ os.environ["LUOPITA_NAPCAT_ENABLED"] = "false"
 os.environ.pop("LUOPITA_ADMIN_TOKEN", None)
 os.environ["LUOPITA_IDENTITY_FILE"] = os.path.join(_tmp, "identity.yaml")
 os.environ["LUOPITA_PERSON_FILE"] = os.path.join(_tmp, "person.yaml")
+os.environ["LUOPITA_EXAMPLES_FILE"] = os.path.join(_tmp, "voice_examples.yaml")
 
 from fastapi.testclient import TestClient
 
@@ -75,6 +76,92 @@ class TestHttpAPI(unittest.TestCase):
             self.assertEqual(persona["owner_address"], "rovina")
             self.assertEqual(persona["voice"], "短句")
 
+            person_path = os.environ["LUOPITA_PERSON_FILE"]
+            with open(person_path, encoding="utf-8") as fh:
+                on_disk = fh.read()
+            self.assertIn("Pita", on_disk)
+            self.assertIn("You are Pita.", on_disk)
+
+            with open(person_path, "w", encoding="utf-8") as fh:
+                fh.write("name: FromFile\nowner_address: disk\nvoice: yaml\ntaboos: x\nrelationship: y\nsystem_prompt: file prompt\n")
+            reread = client.get("/api/persona")
+            self.assertEqual(reread.status_code, 200)
+            self.assertEqual(reread.json()["persona"]["name"], "FromFile")
+            self.assertEqual(reread.json()["persona"]["voice"], "yaml")
+            cfg = client.get("/api/config").json()["config"]
+            self.assertEqual(cfg["persona"]["name"], "FromFile")
+
+    def test_examples_roundtrip(self):
+        with TestClient(self.app) as client:
+            got = client.get("/api/examples")
+            self.assertEqual(got.status_code, 200)
+            self.assertIn("examples", got.json())
+            payload = {
+                "examples": [
+                    {
+                        "id": "tech_port_direct_peer",
+                        "scene": "tech",
+                        "mode": "direct",
+                        "relation": "peer",
+                        "input": "5170 起不来",
+                        "good": "多半是端口占了",
+                        "bad": "好的，这个问题可以从以下几个方面排查",
+                    },
+                    {
+                        "scene": "chat",
+                        "mode": "chime",
+                        "relation": "peer",
+                        "input": "这配置也太绕了",
+                        "good": "是有点绕",
+                        "bad": "",
+                    },
+                ]
+            }
+            put = client.put("/api/examples", json=payload)
+            self.assertEqual(put.status_code, 200)
+            ids = [item["id"] for item in put.json()["examples"]]
+            self.assertIn("tech_port_direct_peer", ids)
+            self.assertTrue(any(item.startswith("chat_chime_peer") or item.startswith("ex_") for item in ids))
+            reread = client.get("/api/examples").json()["examples"]
+            self.assertEqual(len(reread), 2)
+            bad = client.put(
+                "/api/examples",
+                json={"examples": [{"scene": "nope", "mode": "direct", "relation": "peer", "good": "x"}]},
+            )
+            self.assertEqual(bad.status_code, 400)
+
+    def test_profiles_list_and_delete(self):
+        with TestClient(self.app) as client:
+            runtime = self.app.state.runtime
+            runtime.db.user_profiles[("napcat", "9", "1")] = {
+                "platform": "napcat",
+                "chat_id": "9",
+                "user_id": "1",
+                "display_name": "Ada",
+                "preferences": "",
+                "notes": "",
+                "card": {
+                    "address": "Ada",
+                    "familiarity": "peer",
+                    "reply_pref": "短",
+                    "stack": ["docker"],
+                },
+                "updated_at": "2026-09-14T00:00:00+00:00",
+            }
+            listed = client.get("/api/profiles")
+            self.assertEqual(listed.status_code, 200)
+            rows = listed.json()["profiles"]
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["display_name"], "Ada")
+            self.assertEqual(rows[0]["card"]["reply_pref"], "短")
+            self.assertIn("[当前说话人]", rows[0]["prompt"])
+            deleted = client.delete(
+                "/api/profiles",
+                params={"platform": "napcat", "chat_id": "9", "user_id": "1"},
+            )
+            self.assertEqual(deleted.status_code, 200)
+            self.assertEqual(client.get("/api/profiles").json()["profiles"], [])
+
     def test_identity_roundtrip(self):
         with TestClient(self.app) as client:
             got = client.get("/api/identity")
@@ -96,6 +183,25 @@ class TestHttpAPI(unittest.TestCase):
             self.assertIn(("admin", "admin"), keys)
             cfg = client.get("/api/config").json()["config"]
             self.assertEqual(cfg["identity"]["group_require_at"], True)
+
+    def test_identity_engage_and_agent_runtime_settings(self):
+        with TestClient(self.app) as client:
+            ident = client.put(
+                "/api/identity",
+                json={"group_engage_sec": 45, "group_engage_replies": 3},
+            )
+            self.assertEqual(ident.status_code, 200)
+            body = ident.json()["identity"]
+            self.assertEqual(body["group_engage_sec"], 45)
+            self.assertEqual(body["group_engage_replies"], 3)
+            cfg = client.put(
+                "/api/config",
+                json={"agent": {"short_term_messages": 12}, "log_level": "WARNING"},
+            )
+            self.assertEqual(cfg.status_code, 200)
+            saved = cfg.json()["config"]
+            self.assertEqual(saved["agent"]["short_term_messages"], 12)
+            self.assertEqual(saved["log_level"], "WARNING")
 
     def test_group_ignored_without_at(self):
         with TestClient(self.app) as client:

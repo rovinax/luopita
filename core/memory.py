@@ -38,6 +38,11 @@ class MemoryService:
             await self.db.put_memory(user_id=user_id or "anonymous", content=snippet)
         return snippet
 
+    async def forget_user(self, user_id: str) -> None:
+        uid = (user_id or "").strip() or "anonymous"
+        if hasattr(self.db, "clear_user_memory"):
+            await self.db.clear_user_memory(uid)
+
     async def recall(self, user_id: str, query: str, limit: int = RECALL_MAX_ITEMS) -> list[str]:
         cap = max(1, min(int(limit or RECALL_MAX_ITEMS), RECALL_MAX_ITEMS))
         embedding = hash_embed(query or "") if (query or "").strip() else None

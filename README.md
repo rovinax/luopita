@@ -31,7 +31,8 @@ Admin SPA /api/chat ───┘         │
                                  ├── PostgresSaver（短期 thread / 分片）
                                  ├── Redis（群活跃分片）
                                  ├── group_events + pgvector（冷记忆）
-                                 └── long_term_memories（主人长期记忆）
+                                 ├── long_term_memories（主人长期记忆）
+                                 └── cron_jobs（主人定时任务）
 ```
 
 群聊五层管线：**触发 → 分片路由 → 上下文组装 → 压缩 → 热/温/冷存储**。
@@ -89,6 +90,7 @@ COMPOSE_FILE=docker-compose.yml docker compose up --build -d
 | `LUOPITA_REDIS_URL` | `redis://...` 或 `memory://` |
 | `config/identity.yaml` | 主人、唤醒词、群聊策略（gitignore） |
 | `config/person.yaml` | 人格；可用 `person.example.yaml` 覆盖 |
+| `config/voice_examples.yaml` | 说话样例（按场景注入，不是记忆） |
 
 密钥相关约定见 [SECURITY.md](SECURITY.md) / [文档·安全](https://rovinax.github.io/luopita/security/)。**不要把真实 QQ、`.env`、NapCat 登录态提交进仓库。**
 
@@ -117,7 +119,7 @@ docker pull ghcr.io/rovinax/luopita:latest
 - 新平台：实现 `PlatformAdapter`（`enabled` + `send`），入站解析为 `InboundMessage`
 - NapCat WebSocket、飞书、Telegram 可挂到同一 `AdapterRegistry`
 - 命令走白名单 `run_shell`，危险 NapCat 动作（cookies / 退出登录等）默认拒绝
-- 主人斜杠命令：`/help` `/ping` `/status` `/time` `/whoami` `/model` `/allow` `/clear`
+- 主人斜杠命令：`/help` `/ping` `/status` `/time` `/whoami` `/model` `/allow` `/clear` `/cron`
 
 ## 许可证
 
