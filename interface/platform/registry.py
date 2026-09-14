@@ -20,10 +20,24 @@ class AdapterRegistry:
         return items
 
     async def send(self, message: OutboundMessage) -> str | None:
+        from core.outbound_sanitize import sanitize_outbound_text
+
         adapter = self._adapters.get(message.platform)
         if adapter is None:
             self.logger.warning(f"no adapter for platform={message.platform}")
             return None
         if not adapter.enabled():
             return None
+        raw = message.text or ""
+        cleaned = sanitize_outbound_text(raw)
+        if not cleaned.strip():
+            self.logger.warning(
+                f"blocked empty/markup outbound platform={message.platform} chat={message.chat_id}"
+            )
+            return None
+        if cleaned != raw:
+            message = message.model_copy(update={"text": cleaned})
+            self.logger.info(
+                f"sanitized outbound markup platform={message.platform} chat={message.chat_id}"
+            )
         return await adapter.send(message)

@@ -51,6 +51,8 @@ def decide_trigger(
     command: bool = False,
     semantic_score: float = 0.0,
     semantic_threshold: float = SEMANTIC_TRIGGER_THRESHOLD,
+    tech_chance: float = 0.35,
+    chatty_chance: float = 0.22,
 ) -> TriggerResult:
     """Layer 1: whether the bot should enter an active context."""
     if channel_type != "group" or not group_require_at:
@@ -77,6 +79,19 @@ def decide_trigger(
             semantic_score=semantic_score,
         )
 
+    from core.group_talk import score_group_reply
+
+    score, reason = score_group_reply(
+        text=text,
+        has_media=has_media,
+        engaged=engaged,
+        same_speaker=same_speaker,
+        can_open=can_open,
+        replies_left=replies_left,
+        tech_chance=tech_chance,
+        chatty_chance=chatty_chance,
+        cooldown_ready=can_open,
+    )
     mode = decide_group_reply(
         channel_type=channel_type,
         role=role,
@@ -89,11 +104,14 @@ def decide_trigger(
         same_speaker=same_speaker,
         can_open=can_open,
         replies_left=replies_left,
+        tech_chance=tech_chance,
+        chatty_chance=chatty_chance,
     )
+    detail = reason if mode == "ignore" else f"{reason}:{score:.2f}"
     return TriggerResult(
         mode=mode,
         explicit=False,
-        reason="heuristic" if mode != "ignore" else "ignore",
+        reason=detail if mode != "ignore" else reason or "ignore",
         semantic_score=semantic_score,
     )
 

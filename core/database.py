@@ -68,6 +68,18 @@ class Database(Protocol):
     ) -> list[dict[str, Any]]: ...
     async def delete_cron_job(self, job_id: str) -> bool: ...
     async def due_cron_jobs(self, now_iso: str, limit: int = 20) -> list[dict[str, Any]]: ...
+    async def put_commitment(self, row: dict[str, Any]) -> None: ...
+    async def get_commitment(self, commitment_id: str) -> dict[str, Any] | None: ...
+    async def list_commitments(
+        self,
+        *,
+        user_id: str = "",
+        platform: str = "",
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]: ...
+    async def due_commitments(self, now_iso: str, limit: int = 20) -> list[dict[str, Any]]: ...
+    async def delete_commitment(self, commitment_id: str) -> bool: ...
 
 
 class InMemoryDatabase:
@@ -84,6 +96,8 @@ class InMemoryDatabase:
         self._msg_shard: dict[tuple[str, str, str], str] = {}
         self._user_active: dict[tuple[str, str, str], str] = {}
         self.cron_jobs: dict[str, dict[str, Any]] = {}
+        self.commitments: dict[str, dict[str, Any]] = {}
+        self.scratchpads: dict[str, dict[str, Any]] = {}
 
     async def init(self) -> None:
         return None
@@ -473,6 +487,68 @@ class InMemoryDatabase:
         items.sort(key=lambda r: str(r.get("next_run_at") or ""))
         return items[: max(1, limit)]
 
+    async def put_commitment(self, row: dict[str, Any]) -> None:
+        cid = str(row.get("id") or "").strip()
+        if not cid:
+            raise ValueError("commitment id required")
+        self.commitments[cid] = dict(row)
+
+    async def get_commitment(self, commitment_id: str) -> dict[str, Any] | None:
+        row = self.commitments.get((commitment_id or "").strip())
+        return dict(row) if row else None
+
+    async def list_commitments(
+        self,
+        *,
+        user_id: str = "",
+        platform: str = "",
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        items = []
+        for row in self.commitments.values():
+            if user_id and str(row.get("user_id") or "") != user_id:
+                continue
+            if platform and str(row.get("platform") or "") != platform:
+                continue
+            if status is not None and str(row.get("status") or "") != status:
+                continue
+            items.append(dict(row))
+        items.sort(key=lambda r: str(r.get("due_at") or r.get("updated_at") or ""))
+        return items[: max(1, int(limit or 50))]
+
+    async def due_commitments(self, now_iso: str, limit: int = 20) -> list[dict[str, Any]]:
+        from core.clock import parse_created_at
+
+        now = parse_created_at(now_iso)
+        items = []
+        for row in self.commitments.values():
+            if str(row.get("status") or "") != "open":
+                continue
+            due = parse_created_at(row.get("due_at"))
+            if due is None:
+                continue
+            if now is not None and due > now:
+                continue
+            items.append(dict(row))
+        items.sort(key=lambda r: str(r.get("due_at") or ""))
+        return items[: max(1, limit)]
+
+    async def delete_commitment(self, commitment_id: str) -> bool:
+        return self.commitments.pop((commitment_id or "").strip(), None) is not None
+
+    async def get_scratchpad(self, platform: str, user_id: str) -> dict[str, Any] | None:
+        row = self.scratchpads.get(f"{platform}:{user_id}")
+        return dict(row) if row else None
+
+    async def put_scratchpad(self, platform: str, user_id: str, data: dict[str, Any]) -> None:
+        self.scratchpads[f"{platform}:{user_id}"] = {
+            "platform": platform,
+            "user_id": user_id,
+            **dict(data or {}),
+            "updated_at": utc_now(),
+        }
+
 
 _INIT_SQL = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -578,6 +654,33 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_cron_jobs_next ON cron_jobs(enabled, next_run_at);
 CREATE INDEX IF NOT EXISTS idx_cron_jobs_owner ON cron_jobs(platform, user_id);
+CREATE TABLE IF NOT EXISTS commitments (
+    id TEXT PRIMARY KEY,
+    text TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'open',
+    due_at TIMESTAMPTZ,
+    platform TEXT NOT NULL DEFAULT '',
+    channel_type TEXT NOT NULL DEFAULT '',
+    chat_id TEXT NOT NULL DEFAULT '',
+    user_id TEXT NOT NULL DEFAULT '',
+    source_session TEXT NOT NULL DEFAULT '',
+    evidence TEXT NOT NULL DEFAULT '',
+    last_notified_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_commitments_due ON commitments(status, due_at);
+CREATE INDEX IF NOT EXISTS idx_commitments_owner ON commitments(platform, user_id, status);
+CREATE TABLE IF NOT EXISTS owner_scratchpads (
+    platform TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    focus TEXT NOT NULL DEFAULT '',
+    open_summary TEXT NOT NULL DEFAULT '',
+    last_proactive_at TIMESTAMPTZ,
+    reflect_notes TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (platform, user_id)
+);
 """
 
 
@@ -1442,6 +1545,171 @@ class PostgresDatabase:
             rows = await cur.fetchall()
         return [_cron_row(row) for row in rows if row]
 
+    async def put_commitment(self, row: dict[str, Any]) -> None:
+        cid = str(row.get("id") or "").strip()
+        if not cid:
+            raise ValueError("commitment id required")
+        assert self.pool is not None
+        async with self.pool.connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO commitments(
+                    id, text, status, due_at, platform, channel_type, chat_id, user_id,
+                    source_session, evidence, last_notified_at, created_at, updated_at
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    text = EXCLUDED.text,
+                    status = EXCLUDED.status,
+                    due_at = EXCLUDED.due_at,
+                    platform = EXCLUDED.platform,
+                    channel_type = EXCLUDED.channel_type,
+                    chat_id = EXCLUDED.chat_id,
+                    user_id = EXCLUDED.user_id,
+                    source_session = EXCLUDED.source_session,
+                    evidence = EXCLUDED.evidence,
+                    last_notified_at = EXCLUDED.last_notified_at,
+                    updated_at = EXCLUDED.updated_at
+                """,
+                (
+                    cid,
+                    str(row.get("text") or ""),
+                    str(row.get("status") or "open"),
+                    _cron_ts(row.get("due_at")),
+                    str(row.get("platform") or ""),
+                    str(row.get("channel_type") or ""),
+                    str(row.get("chat_id") or ""),
+                    str(row.get("user_id") or ""),
+                    str(row.get("source_session") or ""),
+                    str(row.get("evidence") or ""),
+                    _cron_ts(row.get("last_notified_at")),
+                    _cron_ts(row.get("created_at")),
+                    _cron_ts(row.get("updated_at")),
+                ),
+            )
+            await conn.commit()
+
+    async def get_commitment(self, commitment_id: str) -> dict[str, Any] | None:
+        cid = (commitment_id or "").strip()
+        if not cid:
+            return None
+        assert self.pool is not None
+        async with self.pool.connection() as conn:
+            cur = await conn.execute("SELECT * FROM commitments WHERE id = %s", (cid,))
+            row = await cur.fetchone()
+        return _commitment_row(row) if row else None
+
+    async def list_commitments(
+        self,
+        *,
+        user_id: str = "",
+        platform: str = "",
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        assert self.pool is not None
+        clauses = []
+        params: list[Any] = []
+        if user_id:
+            clauses.append("user_id = %s")
+            params.append(user_id)
+        if platform:
+            clauses.append("platform = %s")
+            params.append(platform)
+        if status is not None:
+            clauses.append("status = %s")
+            params.append(status)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(max(1, int(limit or 50)))
+        async with self.pool.connection() as conn:
+            cur = await conn.execute(
+                f"""
+                SELECT * FROM commitments
+                {where}
+                ORDER BY COALESCE(due_at, updated_at) ASC
+                LIMIT %s
+                """,
+                tuple(params),
+            )
+            rows = await cur.fetchall()
+        return [_commitment_row(row) for row in rows if row]
+
+    async def due_commitments(self, now_iso: str, limit: int = 20) -> list[dict[str, Any]]:
+        assert self.pool is not None
+        async with self.pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM commitments
+                WHERE status = 'open' AND due_at IS NOT NULL AND due_at <= %s
+                ORDER BY due_at ASC
+                LIMIT %s
+                """,
+                (_cron_ts(now_iso), max(1, limit)),
+            )
+            rows = await cur.fetchall()
+        return [_commitment_row(row) for row in rows if row]
+
+    async def delete_commitment(self, commitment_id: str) -> bool:
+        cid = (commitment_id or "").strip()
+        if not cid:
+            return False
+        assert self.pool is not None
+        async with self.pool.connection() as conn:
+            cur = await conn.execute("DELETE FROM commitments WHERE id = %s", (cid,))
+            await conn.commit()
+            return bool(cur.rowcount)
+
+    async def get_scratchpad(self, platform: str, user_id: str) -> dict[str, Any] | None:
+        assert self.pool is not None
+        async with self.pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT * FROM owner_scratchpads WHERE platform = %s AND user_id = %s",
+                (platform, user_id),
+            )
+            row = await cur.fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        for key in ("last_proactive_at", "updated_at"):
+            val = item.get(key)
+            if isinstance(val, datetime):
+                item[key] = val.isoformat()
+            elif val is None:
+                item[key] = ""
+            else:
+                item[key] = str(val)
+        return item
+
+    async def put_scratchpad(self, platform: str, user_id: str, data: dict[str, Any]) -> None:
+        assert self.pool is not None
+        async with self.pool.connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO owner_scratchpads(
+                    platform, user_id, focus, open_summary, last_proactive_at, reflect_notes, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, now())
+                ON CONFLICT (platform, user_id) DO UPDATE SET
+                    focus = EXCLUDED.focus,
+                    open_summary = EXCLUDED.open_summary,
+                    last_proactive_at = EXCLUDED.last_proactive_at,
+                    reflect_notes = EXCLUDED.reflect_notes,
+                    updated_at = now()
+                """,
+                (
+                    platform,
+                    user_id,
+                    str((data or {}).get("focus") or ""),
+                    str((data or {}).get("open_summary") or ""),
+                    _cron_ts((data or {}).get("last_proactive_at")),
+                    str((data or {}).get("reflect_notes") or ""),
+                ),
+            )
+            await conn.commit()
+
 
 def _cron_ts(value: Any):
     if value is None or value == "":
@@ -1466,6 +1734,20 @@ def _cron_row(row: Any) -> dict[str, Any]:
     item["enabled"] = bool(item.get("enabled"))
     item["delete_after_run"] = bool(item.get("delete_after_run"))
     item["consecutive_failures"] = int(item.get("consecutive_failures") or 0)
+    return item
+
+
+def _commitment_row(row: Any) -> dict[str, Any]:
+    item = dict(row)
+    for key in ("due_at", "last_notified_at", "created_at", "updated_at"):
+        val = item.get(key)
+        if isinstance(val, datetime):
+            item[key] = val.isoformat()
+        elif val is None:
+            item[key] = ""
+        else:
+            item[key] = str(val)
+    item["status"] = str(item.get("status") or "open")
     return item
 
 

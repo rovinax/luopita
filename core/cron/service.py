@@ -17,6 +17,8 @@ from core.cron.types import (
 from utils.log import ChatbotLogger
 
 CronRunner = Callable[[CronJob], Awaitable[str]]
+HeartbeatFn = Callable[[], Awaitable[None]]
+HEARTBEAT_INTERVAL_SEC = 90
 
 
 class CronService:
@@ -24,6 +26,8 @@ class CronService:
         self.db = db
         self.logger = logger or ChatbotLogger()
         self._runner: CronRunner | None = None
+        self._heartbeat: HeartbeatFn | None = None
+        self._heartbeat_interval_sec = HEARTBEAT_INTERVAL_SEC
         self._task: asyncio.Task[None] | None = None
         self._wake = asyncio.Event()
         self._sem = asyncio.Semaphore(MAX_CONCURRENT_RUNS)
@@ -32,6 +36,10 @@ class CronService:
 
     def attach_runner(self, runner: CronRunner) -> None:
         self._runner = runner
+
+    def attach_heartbeat(self, heartbeat: HeartbeatFn, *, interval_sec: int = HEARTBEAT_INTERVAL_SEC) -> None:
+        self._heartbeat = heartbeat
+        self._heartbeat_interval_sec = max(15, int(interval_sec or HEARTBEAT_INTERVAL_SEC))
 
     def wake(self) -> None:
         self._wake.set()
@@ -294,8 +302,13 @@ class CronService:
             if job is None or not job.id or job.id in self._running:
                 continue
             asyncio.create_task(self._safe_fire(job), name=f"cron-{job.id}")
+        if self._heartbeat is not None:
+            try:
+                await self._heartbeat()
+            except Exception as exc:
+                self.logger.warning(f"heartbeat: {exc}")
         nxt = await self._seconds_until_next(clock)
-        return nxt
+        return min(nxt, float(self._heartbeat_interval_sec))
 
     async def _safe_fire(self, job: CronJob) -> None:
         try:
@@ -316,8 +329,8 @@ class CronService:
             if soonest is None or due < soonest:
                 soonest = due
         if soonest is None:
-            return 60.0
+            return float(self._heartbeat_interval_sec)
         delta = (soonest - clock).total_seconds()
         if delta <= 0:
             return 0.25
-        return min(60.0, max(0.25, delta))
+        return min(float(self._heartbeat_interval_sec), max(0.25, delta))

@@ -81,12 +81,22 @@ def build_napcat_tools(adapter: NapcatAdapter | None) -> list[BaseTool]:
     @tool
     async def qq_send_private_msg(user_id: str, message: str) -> str:
         """Send a private QQ text message to user_id."""
-        return await _call("send_private_msg", {"user_id": user_id, "message": message})
+        from core.outbound_sanitize import sanitize_outbound_text
+
+        cleaned = sanitize_outbound_text(message)
+        if not cleaned:
+            return "Error: message looked like tool markup and was blocked."
+        return await _call("send_private_msg", {"user_id": user_id, "message": cleaned})
 
     @tool
     async def qq_send_group_msg(group_id: str, message: str) -> str:
         """Send a group QQ text message to group_id."""
-        return await _call("send_group_msg", {"group_id": group_id, "message": message})
+        from core.outbound_sanitize import sanitize_outbound_text
+
+        cleaned = sanitize_outbound_text(message)
+        if not cleaned:
+            return "Error: message looked like tool markup and was blocked."
+        return await _call("send_group_msg", {"group_id": group_id, "message": cleaned})
 
     @tool
     async def qq_delete_msg(message_id: str) -> str:

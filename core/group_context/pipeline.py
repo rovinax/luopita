@@ -112,6 +112,8 @@ class GroupContextPipeline:
         chat_id: str,
         user_id: str,
         replied_bot_hint: bool = False,
+        tech_chance: float = 0.35,
+        chatty_chance: float = 0.22,
     ) -> TriggerResult:
         mentioned, named, command = extract_trigger_flags(
             text=text,
@@ -155,6 +157,8 @@ class GroupContextPipeline:
             replied_bot=replied_bot,
             command=command,
             semantic_score=semantic,
+            tech_chance=tech_chance,
+            chatty_chance=chatty_chance,
         )
 
     async def prepare_reply(

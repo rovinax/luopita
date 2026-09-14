@@ -16,7 +16,13 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.runtime import Runtime
 from core.media import prepare_messages_for_llm
-from core.memory import MemoryService, RECALL_MAX_CHARS, RECALL_MAX_ITEMS
+from core.memory import (
+    MemoryService,
+    RECALL_MAX_CHARS,
+    RECALL_MAX_ITEMS,
+    extract_memory_facts,
+    should_remember_turn,
+)
 from core.window import (
     compact_dropped,
     drop_trailing_extra_humans,
@@ -141,6 +147,28 @@ class TestDropTrailingExtraHumans(unittest.TestCase):
         self.assertEqual(len(keep), len(paired))
 
 
+class TestRememberFilter(unittest.TestCase):
+    def test_skips_filler_and_silence(self):
+        self.assertFalse(should_remember_turn("哈哈", "嗯"))
+        self.assertFalse(should_remember_turn("在吗", "在"))
+        self.assertFalse(should_remember_turn("你好", "[SILENCE]"))
+        self.assertFalse(should_remember_turn("[表情包]", "哈哈"))
+
+    def test_keeps_commitment_and_preference(self):
+        self.assertTrue(should_remember_turn("明天提醒我交周报", "好，明天叫你"))
+        self.assertTrue(should_remember_turn("别用客服腔回我", "行，记下了"))
+        self.assertTrue(should_remember_turn("luopita 那个 docker 端口还在修", "多半 5170 占了"))
+
+    def test_extract_facts_prefers_short_lines(self):
+        facts = extract_memory_facts(
+            "别列步骤，明天提醒我交周报，项目叫 luopita",
+            "好，我记下了",
+        )
+        self.assertTrue(facts)
+        self.assertTrue(any("周报" in item or "提醒" in item for item in facts))
+        self.assertTrue(any("步骤" in item or "偏好" in item or "别" in item for item in facts))
+
+
 class TestArchiveAndRecall(unittest.IsolatedAsyncioTestCase):
     async def test_dropped_archive_is_recallable_and_capped(self):
         from core.database import InMemoryDatabase
@@ -166,6 +194,18 @@ class TestArchiveAndRecall(unittest.IsolatedAsyncioTestCase):
         formatted = memory.format_for_prompt(recalled + ["y" * 500] * 8)
         self.assertLessEqual(len(formatted), RECALL_MAX_CHARS + 80)
         self.assertLessEqual(formatted.count("\n- "), RECALL_MAX_ITEMS)
+
+    async def test_remember_turn_writes_filtered_facts(self):
+        from core.database import InMemoryDatabase
+
+        db = InMemoryDatabase()
+        memory = MemoryService(db)
+        await memory.remember_turn("u1", "哈哈", "嗯")
+        self.assertEqual(db.memories.get("u1", []), [])
+        await memory.remember_turn("u1", "明天提醒我交周报", "好，明天叫你")
+        rows = db.memories["u1"]
+        self.assertEqual(len(rows), 1)
+        self.assertIn("周报", rows[0]["content"])
 
     def test_compact_empty_without_human(self):
         self.assertEqual(compact_dropped([AIMessage(content="only ai")]), "")
@@ -205,26 +245,30 @@ class TestCheckpointWindow(unittest.IsolatedAsyncioTestCase):
             deliver=False,
         )
 
-    async def test_owner_does_not_put_memory_every_turn(self):
+    async def test_owner_remembers_meaningful_turns_and_archives_overflow(self):
         calls: list[str] = []
         original = self.runtime.db.put_memory
 
-        async def wrapped(user_id: str, content: str) -> None:
+        async def wrapped(user_id: str, content: str, embedding=None) -> None:
             calls.append(content)
-            await original(user_id, content)
+            try:
+                await original(user_id, content, embedding=embedding)
+            except TypeError:
+                await original(user_id, content)
 
         self.runtime.db.put_memory = wrapped  # type: ignore[method-assign]
-        for i in range(3):
-            await self._chat(platform="admin", user_id="admin", text=f"early-{i} pineapple")
-        self.assertEqual(calls, [])
+        await self._chat(platform="admin", user_id="admin", text="哈哈")
+        filler_calls = list(calls)
+        self.assertEqual(filler_calls, [])
+        await self._chat(platform="admin", user_id="admin", text="明天提醒我交周报 pineapple")
+        self.assertTrue(any("周报" in item or "提醒" in item for item in calls))
+        intent_count = len(calls)
         for i in range(12):
-            await self._chat(platform="admin", user_id="admin", text=f"later-{i} pineapple")
-        self.assertTrue(calls)
-        self.assertLess(len(calls), 15)
-        self.assertTrue(all(item.startswith("更早聊过：") for item in calls))
-        self.assertFalse(any(item.startswith("User:") for item in calls))
-        recalled = await self.runtime.memory.recall("admin", "early-0")
-        self.assertTrue(any("early-0" in item for item in recalled))
+            await self._chat(platform="admin", user_id="admin", text=f"later-{i} pineapple 继续修 luopita")
+        self.assertGreater(len(calls), intent_count)
+        self.assertTrue(any(item.startswith("更早聊过：") for item in calls))
+        recalled = await self.runtime.memory.recall("admin", "周报")
+        self.assertTrue(any("周报" in item or "提醒" in item for item in recalled))
 
     async def test_checkpoint_stops_growing(self):
         session_id = ""

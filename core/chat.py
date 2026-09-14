@@ -11,6 +11,7 @@ from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage
 
 from core.agent_runtime import begin_shell_turn, end_shell_turn
 from core.bubbles import split_reply_bubbles
+from core.outbound_sanitize import sanitize_outbound_text
 from core.commands import (
     parse_slash,
     render_allow,
@@ -31,9 +32,18 @@ from core.commands import (
     render_unknown,
     render_whoami,
 )
+from core.commitments.service import CommitmentService
+from core.commitments.types import Commitment
 from core.cron.context import CronDelivery, reset_cron_delivery, set_cron_delivery
 from core.cron.parse import parse_when, split_cron_args
 from core.cron.types import CronJob
+from core.reflect import maybe_reflect_turn
+from core.scratchpad import (
+    format_scratchpad_block,
+    load_scratchpad,
+    mark_proactive,
+    touch_scratchpad_after_turn,
+)
 from core.group_context.keys import shard_id_from_session_key, shard_session_key
 from core.graph import GRAPH_RECURSION_LIMIT, INVOKE_TIMEOUT_SEC
 from core.group_talk import (
@@ -85,21 +95,32 @@ class GroupThread:
 
 def last_ai_text(result: dict[str, Any]) -> str:
     messages = result.get("messages") or []
+    # Prefer final assistant text without pending tool_calls; fall back to any AI text.
+    candidates: list[Any] = []
     for message in reversed(messages):
         if isinstance(message, AIMessage) or getattr(message, "type", "") == "ai":
-            content = message.content
-            if isinstance(content, str) and content.strip():
-                return content.strip()
-            if isinstance(content, list):
-                parts: list[str] = []
-                for block in content:
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        parts.append(str(block.get("text") or ""))
-                    elif isinstance(block, str):
-                        parts.append(block)
-                text = "".join(parts).strip()
-                if text:
-                    return text
+            candidates.append(message)
+    ordered = [m for m in candidates if not getattr(m, "tool_calls", None)] + [
+        m for m in candidates if getattr(m, "tool_calls", None)
+    ]
+    for message in ordered:
+        content = message.content
+        text = ""
+        if isinstance(content, str) and content.strip():
+            text = content.strip()
+        elif isinstance(content, list):
+            parts: list[str] = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    parts.append(str(block.get("text") or ""))
+                elif isinstance(block, str):
+                    parts.append(block)
+            text = "".join(parts).strip()
+        cleaned = sanitize_outbound_text(text)
+        if cleaned:
+            return cleaned
+        # Markup-only / empty after sanitize: keep scanning earlier AI messages.
+        continue
     return ""
 
 
@@ -117,6 +138,7 @@ class ChatOrchestrator:
         group_pipeline: GroupContextPipeline | None = None,
         cron: Any = None,
         cron_graph: Any = None,
+        commitments: CommitmentService | None = None,
     ) -> None:
         self.config = config
         self.logger = logger
@@ -130,9 +152,11 @@ class ChatOrchestrator:
         self.group_pipeline = group_pipeline
         self.cron = cron
         self.cron_graph = cron_graph
+        self.commitments = commitments
         self._last_group_reply: dict[str, float] = {}
         self._group_threads: dict[str, GroupThread] = {}
         self._bg_tasks: set[asyncio.Task] = set()
+        self._heartbeat_running: set[str] = set()
 
     def attach(
         self,
@@ -144,6 +168,7 @@ class ChatOrchestrator:
         group_pipeline: GroupContextPipeline | None = None,
         cron_graph: Any = None,
         cron: Any = None,
+        commitments: CommitmentService | None = None,
     ) -> None:
         self.owner_graph = owner_graph
         self.user_graph = user_graph
@@ -158,6 +183,8 @@ class ChatOrchestrator:
             self.cron_graph = cron_graph
         if cron is not None:
             self.cron = cron
+        if commitments is not None:
+            self.commitments = commitments
 
     def _graph_for(self, role: str) -> Any:
         return self.owner_graph if role == "owner" else self.user_graph
@@ -389,6 +416,17 @@ class ChatOrchestrator:
             await self.memory.db.clear_user_profile(
                 inbound.platform, inbound.chat_id, inbound.user_id
             )
+        if hasattr(self.memory.db, "put_scratchpad"):
+            await self.memory.db.put_scratchpad(
+                inbound.platform,
+                inbound.user_id,
+                {"focus": "", "open_summary": "", "reflect_notes": "", "last_proactive_at": ""},
+            )
+        if self.commitments is not None:
+            for item in await self.commitments.list_open(
+                platform=inbound.platform, user_id=inbound.user_id, limit=50
+            ):
+                await self.commitments.close(item.id, status="cancelled")
         chat_key = f"{inbound.platform}:{inbound.channel_type}:{inbound.chat_id}"
         self._group_threads.pop(chat_key, None)
         self._last_group_reply.pop(chat_key, None)
@@ -676,6 +714,117 @@ class ChatOrchestrator:
         except Exception as exc:
             self.logger.warning(f"profile refresh skip user={user_id} chat={chat_id}: {exc}")
 
+    async def _after_owner_turn(
+        self,
+        *,
+        inbound: InboundMessage,
+        session_id: str,
+        user_text: str,
+    ) -> None:
+        reflect_line = ""
+        try:
+            reflect_line = await maybe_reflect_turn(
+                self.memory, user_id=inbound.user_id, user_text=user_text
+            )
+        except Exception as exc:
+            self.logger.warning(f"reflect skip user={inbound.user_id}: {exc}")
+
+        open_summary = ""
+        if self.commitments is not None:
+            try:
+                changed = await self.commitments.ingest_turn(
+                    user_text=user_text,
+                    platform=inbound.platform,
+                    channel_type=inbound.channel_type,
+                    chat_id=inbound.chat_id,
+                    user_id=inbound.user_id,
+                    source_session=session_id,
+                )
+                if changed and self.cron is not None:
+                    self.cron.wake()
+                open_items = await self.commitments.list_open(
+                    platform=inbound.platform, user_id=inbound.user_id, limit=5
+                )
+                open_summary = self.commitments.summary_for_scratchpad(open_items)
+            except Exception as exc:
+                self.logger.warning(f"commitment ingest skip user={inbound.user_id}: {exc}")
+
+        try:
+            existing = await load_scratchpad(
+                self.memory.db, platform=inbound.platform, user_id=inbound.user_id
+            )
+            await touch_scratchpad_after_turn(
+                self.memory.db,
+                platform=inbound.platform,
+                user_id=inbound.user_id,
+                user_text=user_text,
+                open_summary=open_summary or str(existing.get("open_summary") or ""),
+                reflect_notes=reflect_line or str(existing.get("reflect_notes") or ""),
+            )
+        except Exception as exc:
+            self.logger.warning(f"scratchpad skip user={inbound.user_id}: {exc}")
+
+    async def run_commitment_followup(self, item: Commitment) -> str:
+        # Always deliver to private chat with the owner to avoid noisy group pings.
+        channel_type = "private"
+        chat_id = item.user_id or item.chat_id
+        job = CronJob(
+            id=f"cmt-{item.id}",
+            name=item.text[:24] or "commitment",
+            kind="at",
+            schedule="now",
+            prompt=self.commitments.format_followup_prompt(item) if self.commitments else item.text,
+            platform=item.platform,
+            channel_type=channel_type,
+            chat_id=chat_id,
+            user_id=item.user_id,
+            delete_after_run=True,
+        )
+        reply = await self.run_cron_turn(job)
+        if self.commitments is not None:
+            await self.commitments.mark_notified(item.id)
+            await self.commitments.close(item.id, status="done")
+            try:
+                await mark_proactive(
+                    self.memory.db, platform=item.platform, user_id=item.user_id
+                )
+            except Exception:
+                pass
+        return reply
+
+    async def heartbeat_tick(self) -> None:
+        if self.commitments is None:
+            return
+        due = await self.commitments.due_open(limit=10)
+        for item in due:
+            if not item.id or item.id in self._heartbeat_running:
+                continue
+            if not self.commitments.should_notify(item):
+                continue
+            if not self.commitments.allow_proactive(platform=item.platform, user_id=item.user_id):
+                continue
+            self._heartbeat_running.add(item.id)
+            self.commitments.note_proactive(platform=item.platform, user_id=item.user_id)
+
+            def _done(t: asyncio.Task, cid: str = item.id) -> None:
+                self._bg_tasks.discard(t)
+                self._heartbeat_running.discard(cid)
+
+            task = asyncio.create_task(
+                self._safe_commitment_followup(item),
+                name=f"commitment-{item.id}",
+            )
+            self._bg_tasks.add(task)
+            task.add_done_callback(_done)
+
+    async def _safe_commitment_followup(self, item: Commitment) -> None:
+        try:
+            await self.run_commitment_followup(item)
+            self.logger.info(f"commitment followup id={item.id} user={item.user_id}")
+        except Exception as exc:
+            self.logger.warning(f"commitment followup failed id={item.id}: {exc}")
+            self._heartbeat_running.discard(item.id)
+
     async def run_cron_turn(self, job: CronJob) -> str:
         cfg = self.get_config()
         session_id = f"cron:{job.id}"
@@ -831,6 +980,8 @@ class ChatOrchestrator:
                 chat_id=inbound.chat_id,
                 user_id=inbound.user_id,
                 replied_bot_hint=replied_bot,
+                tech_chance=ident.group_tech_chance,
+                chatty_chance=ident.group_chatty_chance,
             )
             mode = trigger.mode
             await pipeline.ingest_background(
@@ -892,6 +1043,8 @@ class ChatOrchestrator:
                 same_speaker=same_speaker,
                 can_open=can_open,
                 replies_left=replies_left,
+                tech_chance=ident.group_tech_chance,
+                chatty_chance=ident.group_chatty_chance,
             )
             if inbound.channel_type == "group":
                 await self.memory.db.append_group_event(
@@ -973,6 +1126,12 @@ class ChatOrchestrator:
         )
         fetched = await self._fetch_media_blobs(inbound, to_fetch, mock=cfg.is_mock_llm())
         bare_wake = bool(assembled is not None and assembled.bare_wake)
+        scratchpad_block = ""
+        if role == "owner":
+            pad = await load_scratchpad(
+                self.memory.db, platform=inbound.platform, user_id=inbound.user_id
+            )
+            scratchpad_block = format_scratchpad_block(pad)
         examples_block = format_examples_block(
             select_examples(
                 mode=infer_mode(chime_in=chime_in, bare_wake=bare_wake),
@@ -994,6 +1153,7 @@ class ChatOrchestrator:
             has_media=bool(fetched),
             bare_wake=bare_wake,
             examples=examples_block,
+            scratchpad=scratchpad_block,
         )
         files_client = get_files_client(cfg.llm.provider, cfg.llm.base_url, cfg.llm.api_key)
         user_text = inbound.text
@@ -1090,13 +1250,13 @@ class ChatOrchestrator:
             reset_current_role(token)
         latency_ms = int((time.perf_counter() - t0) * 1000)
         reply = last_ai_text(result or {})
-        if chime_in and is_silence_reply(reply):
+        if chime_in and (not reply or is_silence_reply(reply)):
             await self._drop_silence_ai(graph, session_id, result)
             self.logger.info(
                 f"chat silent session={session_id} role={role} platform={inbound.platform} latency_ms={latency_ms}"
             )
             return ChatResponse(session_id=session_id, reply="", ignored=True, role=role)
-        reply = reply or "(empty reply)"
+        reply = reply or "刚才卡住了，再说一次。"
         bubbles = split_reply_bubbles(reply, max_bubbles=3 if chime_in else 4)
         stored_reply = "\n".join(bubbles) if bubbles else reply
         await self.memory.db.save_message(
@@ -1192,6 +1352,16 @@ class ChatOrchestrator:
                         user_id=inbound.user_id,
                     )
                 )
+        if role == "owner" and stored_reply and not is_silence_reply(stored_reply):
+            try:
+                await self.memory.remember_turn(inbound.user_id, stored_user, stored_reply)
+            except Exception as exc:
+                self.logger.warning(f"remember_turn skip user={inbound.user_id}: {exc}")
+            await self._after_owner_turn(
+                inbound=inbound,
+                session_id=session_id,
+                user_text=stored_user,
+            )
         self.logger.info(
             f"chat session={session_id} role={role} mode={mode} bubbles={len(bubbles)} "
             f"platform={inbound.platform} latency_ms={latency_ms}"

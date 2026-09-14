@@ -233,6 +233,42 @@ def is_bare_wake(
     return looks_like_filler(remainder) and len(compact) <= 8
 
 
+def score_group_reply(
+    *,
+    text: str = "",
+    has_media: bool = False,
+    engaged: bool = False,
+    same_speaker: bool = False,
+    can_open: bool = True,
+    replies_left: int = 0,
+    tech_chance: float = 0.35,
+    chatty_chance: float = 0.22,
+    cooldown_ready: bool = True,
+) -> tuple[float, str]:
+    """Return (utility 0..1, reason). Higher means more worth chiming."""
+    if looks_like_filler(text) and not has_media:
+        return 0.0, "filler"
+    if engaged:
+        if replies_left <= 0:
+            return 0.0, "exhausted"
+        if same_speaker:
+            return 0.92, "engaged_same"
+        if looks_like_tech(text) or looks_like_question(text) or has_media:
+            return 0.78, "engaged_relevant"
+        return 0.15, "engaged_bystander"
+    if not can_open or not cooldown_ready:
+        return 0.0, "cooldown"
+    if looks_like_tech(text):
+        return min(1.0, 0.55 + 0.45 * max(0.0, min(1.0, tech_chance))), "tech"
+    if looks_like_question(text) and (has_media or len((text or "").strip()) >= 8):
+        return min(1.0, 0.5 + 0.4 * max(0.0, min(1.0, tech_chance))), "question"
+    # Soft chatty openers: need higher chatty_chance to clear threshold.
+    soft = 0.2 + 0.35 * max(0.0, min(1.0, chatty_chance))
+    if len((text or "").strip()) >= 16:
+        return soft, "chatty"
+    return 0.05, "low"
+
+
 def decide_group_reply(
     *,
     channel_type: str,
@@ -255,20 +291,35 @@ def decide_group_reply(
         return "direct"
     if mentioned or named:
         return "direct"
-    if looks_like_filler(text) and not has_media:
-        return "ignore"
+    score, reason = score_group_reply(
+        text=text,
+        has_media=has_media,
+        engaged=engaged,
+        same_speaker=same_speaker,
+        can_open=can_open,
+        replies_left=replies_left,
+        tech_chance=tech_chance,
+        chatty_chance=chatty_chance,
+        cooldown_ready=cooldown_ready,
+    )
+    # Threshold: tech/chatty chances scale how picky we are.
+    # Default tech_chance=0.35 → threshold ~0.55; clear tech (~0.7+) still passes.
     if engaged:
-        if replies_left <= 0:
-            return "ignore"
-        if same_speaker or looks_like_tech(text) or looks_like_question(text) or has_media:
-            return "chime"
-        return "ignore"
-    if not can_open:
-        return "ignore"
-    if looks_like_tech(text):
+        threshold = 0.5
+    elif looks_like_tech(text) or looks_like_question(text):
+        threshold = max(0.05, 1.0 - float(tech_chance or 0.0) * 1.3)
+    else:
+        threshold = max(0.2, 1.0 - float(chatty_chance or 0.0))
+    # Optional rng only nudges borderline scores (±0.05), not a lottery for clear cases.
+    if rng is not None and 0 < score < 1:
+        try:
+            jitter = (float(rng()) - 0.5) * 0.1
+        except Exception:
+            jitter = 0.0
+        score = max(0.0, min(1.0, score + jitter))
+    if score >= threshold:
         return "chime"
-    if looks_like_question(text) and (has_media or len((text or "").strip()) >= 8):
-        return "chime"
+    _ = reason  # retained for callers via score_group_reply
     return "ignore"
 
 

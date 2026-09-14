@@ -149,6 +149,7 @@ def compose_system_prompt(
     bare_wake: bool = False,
     cron_job: bool = False,
     examples: str = "",
+    scratchpad: str = "",
 ) -> str:
     name = persona.name.strip() or "小Lu"
     lines = [f"你是{name}，一个会像人一样说话的聊天对象，不是客服。"]
@@ -298,6 +299,9 @@ def compose_system_prompt(
     extra_examples = (examples or "").strip()
     if extra_examples and not cron_job:
         lines.append(extra_examples)
+    pad = (scratchpad or "").strip()
+    if pad and role == "owner" and not cron_job:
+        lines.append(pad)
     return "\n".join(lines)
 
 

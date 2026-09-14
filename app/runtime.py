@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from core.commitments.service import CommitmentService
 from core.chat import ChatOrchestrator
 from core.cron.service import CronService
 from core.database import Database, create_database
@@ -76,6 +77,7 @@ class Runtime:
     identity: IdentityStore
     cron: CronService
     cron_graph: Any
+    commitments: CommitmentService
     _checkpointer_pool: Any = field(default=None, repr=False)
     _settings_stamp: tuple[float, float] | None = field(default=None, repr=False)
 
@@ -127,6 +129,7 @@ class Runtime:
         tui = TuiAdapter(config.tui)
         adapters = AdapterRegistry([napcat, tui, AdminAdapter()], logger=logger)
         cron = CronService(db, logger)
+        commitments = CommitmentService(db, logger)
         runtime = cls(
             config=config,
             logger=logger,
@@ -146,6 +149,7 @@ class Runtime:
             identity=identity,
             cron=cron,
             cron_graph=None,
+            commitments=commitments,
             _checkpointer_pool=pool,
         )
         runtime.owner_graph = build_graph(
@@ -186,8 +190,10 @@ class Runtime:
             group_pipeline=group_pipeline,
             cron=cron,
             cron_graph=runtime.cron_graph,
+            commitments=commitments,
         )
         cron.attach_runner(runtime.orchestrator.run_cron_turn)
+        cron.attach_heartbeat(runtime.orchestrator.heartbeat_tick, interval_sec=90)
         await cron.start()
         await runtime._sync_bot_id()
         runtime._touch_settings_stamp()
@@ -298,6 +304,7 @@ class Runtime:
             group_pipeline=self.group_pipeline,
             cron_graph=self.cron_graph,
             cron=self.cron,
+            commitments=self.commitments,
         )
 
     async def apply_update(self, patch: ConfigUpdate) -> AppConfig:
