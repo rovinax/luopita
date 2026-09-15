@@ -8,13 +8,17 @@ license = { text = "MIT" }
 authors = [{ name = "rovina" }]
 keywords = [
     "qq-bot",
+    "qq-group",
     "napcat",
     "onebot",
+    "onebot11",
     "langgraph",
     "fastapi",
     "chatbot",
     "pgvector",
     "group-chat",
+    "redis",
+    "postgres",
 ]
 dependencies = [
     "fastapi>=0.115.0",

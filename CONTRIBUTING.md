@@ -14,7 +14,7 @@ Group-chat, identity, and outbound-sanitize changes should add coverage in `test
 
 ## Local setup
 
-See the [docs site](https://rovinax.github.io/luopita/), [docs/deploy.md](docs/deploy.md), and the Quick Start in [README.md](README.md).
+See the [docs site](https://rovinax.github.io/luopita/), [docs/deploy.md](docs/deploy.md), the English Quick Start in [README.md](README.md), and [README_CN.md](README_CN.md).
 
 ```bash
 uv sync --group docs

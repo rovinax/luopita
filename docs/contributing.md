@@ -23,4 +23,4 @@ uv run mkdocs serve
 
 ## 更多
 
-本地启动见 [快速开始](getting-started.md)，完整部署见 [部署](deploy.md)，模块边界见 [架构](architecture.md)。
+本地启动见 [快速开始](getting-started.md)，完整部署见 [部署](deploy.md)，模块边界见 [架构](architecture.md)。仓库简介：英文 [README.md](https://github.com/rovinax/luopita/blob/master/README.md)，中文 [README_CN.md](https://github.com/rovinax/luopita/blob/master/README_CN.md)。

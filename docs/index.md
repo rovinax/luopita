@@ -4,7 +4,7 @@
 
 > 不是又一个「整群共用一条会话」的 bot。Luopita 把触发、路由、组装、压缩和存储拆开，尽量避免 A 的话题被答给 B。
 
-当前版本 **0.2.0**。源码：[github.com/rovinax/luopita](https://github.com/rovinax/luopita)
+当前版本 **0.2.0**。源码：[github.com/rovinax/luopita](https://github.com/rovinax/luopita)。仓库 README 默认英文（[README.md](https://github.com/rovinax/luopita/blob/master/README.md)），中文见 [README_CN.md](https://github.com/rovinax/luopita/blob/master/README_CN.md)。
 
 ## 为什么用它
 
