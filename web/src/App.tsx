@@ -872,6 +872,28 @@ function profileKey(item: SpeakerProfile) {
   return `${item.platform}:${item.chat_id}:${item.user_id}`;
 }
 
+function formatShanghaiClock(value: string | undefined | null): string {
+  const raw = (value || "").trim();
+  if (!raw) return "-";
+  if (raw.includes("UTC+8")) return raw;
+  let text = raw;
+  if (text.endsWith("Z")) text = `${text.slice(0, -1)}+00:00`;
+  if (/^\d{4}-\d{2}-\d{2} /.test(text)) text = text.replace(" ", "T");
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) return raw;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const pick = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  return `${pick("year")}-${pick("month")}-${pick("day")} ${pick("hour")}:${pick("minute")}（UTC+8）`;
+}
+
 function ProfilesPanel() {
   const [profiles, setProfiles] = useState<SpeakerProfile[]>([]);
   const [active, setActive] = useState("");
@@ -973,7 +995,7 @@ function ProfilesPanel() {
               </div>
               <div className="stat">
                 <span>更新</span>
-                <span>{selected.updated_at || "-"}</span>
+                <span>{formatShanghaiClock(selected.updated_at)}</span>
               </div>
               {selected.prompt ? <pre className="profile-prompt">{selected.prompt}</pre> : <p className="hint">这张卡还太空，进 prompt 会被省略。</p>}
               <div className="row" style={{ marginTop: 12 }}>

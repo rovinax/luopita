@@ -15,6 +15,7 @@ from core.group_context.profile import (
     format_profile_card,
     merge_profile,
     parse_extract_json,
+    serialize_profile_row,
     should_refresh,
 )
 from core.group_context.redis_client import InMemoryRedis
@@ -60,8 +61,23 @@ class TestProfileCard(unittest.TestCase):
         self.assertIn("别说教", merged.taboos)
         self.assertIn("当众翻旧账", merged.taboos)
         self.assertEqual(merged.recent, "这周 compose 端口")
+        self.assertIn("+08:00", merged.updated_at)
         up = merge_profile(old, ProfileCard(familiarity="familiar"))
         self.assertEqual(up.familiarity, "familiar")
+
+    def test_serialize_converts_utc_updated_at(self):
+        row = serialize_profile_row(
+            {
+                "platform": "napcat",
+                "chat_id": "9",
+                "user_id": "1",
+                "display_name": "Ada",
+                "updated_at": "2026-09-12T06:41:00+00:00",
+                "card": {"address": "Ada", "familiarity": "peer", "reply_pref": "短"},
+            }
+        )
+        self.assertEqual(row["updated_at"], "2026-09-12 14:41（UTC+8）")
+        self.assertEqual(row["card"]["updated_at"], "2026-09-12 14:41（UTC+8）")
 
     def test_format_omits_empty_and_shortens_chime(self):
         self.assertEqual(format_profile_card(ProfileCard()), "")

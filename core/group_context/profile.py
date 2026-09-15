@@ -6,8 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from core.clock import parse_created_at
-from core.database import utc_now
+from core.clock import format_shanghai_display, now_shanghai, parse_created_at
 
 FAMILIARITY_ORDER = {"stranger": 0, "peer": 1, "familiar": 2}
 FAMILIARITY_ZH = {"stranger": "生", "peer": "熟", "familiar": "很熟"}
@@ -136,13 +135,17 @@ def serialize_profile_row(row: dict[str, Any] | None) -> dict[str, Any]:
         return {}
     card = card_from_row(row)
     display = str(row.get("display_name") or card.address or row.get("user_id") or "").strip()
+    shown = format_shanghai_display(row.get("updated_at") or card.updated_at or "")
+    card_data = card.to_dict()
+    if shown:
+        card_data["updated_at"] = shown
     return {
         "platform": str(row.get("platform") or ""),
         "chat_id": str(row.get("chat_id") or ""),
         "user_id": str(row.get("user_id") or ""),
         "display_name": display,
-        "updated_at": str(row.get("updated_at") or card.updated_at or ""),
-        "card": card.to_dict(),
+        "updated_at": shown,
+        "card": card_data,
         "prompt": format_profile_card(card, sender_name=display),
     }
 
@@ -158,7 +161,7 @@ def merge_profile(old: ProfileCard | None, new: ProfileCard | None) -> ProfileCa
         taboos=_merge_phrases(left.taboos, right.taboos),
         recent=_prefer(right.recent, left.recent),
         evidence=_prefer(right.evidence, left.evidence),
-        updated_at=utc_now(),
+        updated_at=now_shanghai().isoformat(),
     )
     return merged
 

@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
+from core.clock import now_shanghai
 from utils.config import AppConfig
 
 
@@ -408,7 +409,7 @@ class InMemoryDatabase:
             "preferences": preferences if preferences else str(existing.get("preferences") or ""),
             "notes": notes if notes else str(existing.get("notes") or ""),
             "card": dict(stored_card),
-            "updated_at": utc_now(),
+            "updated_at": now_shanghai().isoformat(),
         }
 
     async def clear_user_profile(self, platform: str, chat_id: str, user_id: str) -> None:
@@ -1285,7 +1286,11 @@ class PostgresDatabase:
         if not row:
             return None
         item = dict(row)
-        item["updated_at"] = str(item.get("updated_at") or "")
+        val = item.get("updated_at")
+        if isinstance(val, datetime):
+            item["updated_at"] = val.isoformat()
+        else:
+            item["updated_at"] = str(val or "")
         card = item.get("card")
         if not isinstance(card, dict):
             item["card"] = {}
@@ -1358,7 +1363,11 @@ class PostgresDatabase:
         out: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
-            item["updated_at"] = str(item.get("updated_at") or "")
+            val = item.get("updated_at")
+            if isinstance(val, datetime):
+                item["updated_at"] = val.isoformat()
+            else:
+                item["updated_at"] = str(val or "")
             if not isinstance(item.get("card"), dict):
                 item["card"] = {}
             out.append(item)

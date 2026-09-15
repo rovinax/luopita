@@ -291,6 +291,8 @@ class TestVoiceAndRole(unittest.TestCase):
         self.assertIn("能读懂在表达什么", owner)
         self.assertIn("不要围着它展开", owner)
         self.assertIn("一层意思", owner)
+        self.assertIn("纯文本", owner)
+        self.assertIn("禁止 Markdown", owner)
         self.assertIn("run_shell", owner)
         self.assertIn("普通用户", user)
         self.assertIn("这我做不了", user)
