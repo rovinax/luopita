@@ -1,5 +1,7 @@
 # Luopita
 
+**English** | [简体中文](README_CN.md)
+
 [![CI](https://github.com/rovinax/luopita/actions/workflows/ci.yml/badge.svg)](https://github.com/rovinax/luopita/actions/workflows/ci.yml)
 [![Docker](https://github.com/rovinax/luopita/actions/workflows/docker.yml/badge.svg)](https://github.com/rovinax/luopita/actions/workflows/docker.yml)
 [![Docs](https://github.com/rovinax/luopita/actions/workflows/docs.yml/badge.svg)](https://github.com/rovinax/luopita/actions/workflows/docs.yml)
@@ -9,40 +11,42 @@
 [![LangGraph](https://img.shields.io/badge/agent-LangGraph-violet.svg)](https://github.com/langchain-ai/langgraph)
 [![Docs Site](https://img.shields.io/badge/docs-MkDocs%20Material-teal.svg)](https://rovinax.github.io/luopita/)
 
-**会像人一样插话的 QQ 群聊机器人内核** — NapCat / OneBot 接入，LangGraph Agent 驱动，群聊按说话人分片。热上下文进 Redis，温数据落 Postgres，冷检索走 pgvector（本地哈希向量，不调外部 embedding API）。
+**QQ group chatbot kernel** for [NapCat](https://github.com/NapNeko/NapCatQQ) / [OneBot 11](https://github.com/botuniverse/onebot-11): a [LangGraph](https://github.com/langchain-ai/langgraph) agent on [FastAPI](https://fastapi.tiangolo.com/), with **per-speaker context shards** so the bot does not answer B with A’s unfinished thread.
 
-> 不是又一个「整群共用一条会话」的 bot。Luopita 把触发、路由、组装、压缩和存储拆开，尽量避免 A 的话题被答给 B。
+Hot context lives in **Redis**. Warm state lives in **Postgres**. Cold recall uses **pgvector** with a local hash embedding (no external embedding API).
 
-当前版本 **0.2.0**。完整说明见 **[文档站](https://rovinax.github.io/luopita/)**。
+> Not another “one shared session for the whole group” bot. Luopita splits trigger, routing, assembly, compression, and storage.
 
-## 为什么用它
+Version **0.2.0**. Full guide (Chinese): **[docs site](https://rovinax.github.io/luopita/)**. 中文 README：[README_CN.md](README_CN.md).
 
-| 痛点 | Luopita 怎么处理 |
-|------|------------------|
-| 群里串话、抢别人话题 | 按说话人分片 + 旁听背景隔离 + 裸 `@` 走开场 |
-| 上下文又贵又乱 | Redis 热分片 / Postgres 温存储 / pgvector 冷检索 |
-| 多入口各写一套逻辑 | NapCat、TUI、管理台统一成 `InboundMessage` → 同一编排器 |
-| 主人私事漏给群友 | `owner` / `user` 两套图；shell、QQ 工具、定时任务只给主人 |
-| 落地麻烦 | 一份 Compose：Postgres + Redis + NapCat + App |
+## Why Luopita
 
-## 现在能做什么
+| Pain | What Luopita does |
+|------|-------------------|
+| Cross-talk in QQ groups | Per-speaker shards, eavesdrop-only background, bare `@` as a greeting |
+| Context is expensive and messy | Redis hot shards / Postgres warm store / pgvector cold search |
+| Each inbox reimplements the agent | NapCat, TUI, and admin console all become `InboundMessage` |
+| Owner secrets leak into the group | Separate `owner` / `user` graphs; shell, QQ tools, and cron are owner-only |
+| Painful deploy | One Compose file: Postgres + Redis + NapCat + app |
 
-- 群聊五层管线：触发 → 分片路由 → 上下文组装 → 压缩 → 热/温/冷存储
-- 主人斜杠命令与自然语言定时任务（`/cron` 不经模型）
-- 从对话里抽出「明天提醒我交周报」这类开放承诺，到期主动跟进（限频）
-- 说话样例按场景注入 system，不是会话记忆；群友画像只描述当前说话人
-- 出站清洗：剥 Markdown / 泄漏的 tool-call 标记，再按气泡拆成多条 QQ 消息
-- 管理台：总览、配置、会话对话、画像只读查看
+## Features
 
-## 架构一览
+- **Group-chat pipeline:** trigger → shard routing → context assembly → compression → hot/warm/cold storage
+- **Owner slash commands** and natural-language cron (`/cron` is handled by the system, not the model)
+- **Commitments:** extracts “remind me to file the weekly report tomorrow” and follows up on a rate-limited heartbeat
+- **Voice examples** inject tone into the system prompt (they are not chat memory); **speaker profiles** describe only the current person
+- **Outbound sanitizing:** strip Markdown and leaked tool-call markup, then split into QQ message bubbles
+- **Admin SPA:** overview, config, console chat, read-only profiles
+
+## Architecture
 
 ```text
 NapCat (QQ) ──webhook──┐
 TUI WebSocket ─────────┼── FastAPI ── ChatOrchestrator
 Admin SPA /api/chat ───┘         │
                                  ├── owner_graph / user_graph / cron_graph
-                                 ├── PostgresSaver（短期 thread / 分片）
-                                 ├── Redis HotStore（活跃分片、实体栈）
+                                 ├── PostgresSaver (short thread / shard)
+                                 ├── Redis HotStore (active shards, entity stack)
                                  └── Postgres
                                        group_events + pgvector
                                        user_profiles / long_term_memories
@@ -50,18 +54,18 @@ Admin SPA /api/chat ───┘         │
 ```
 
 ```text
-app/          FastAPI、鉴权、Runtime
-agent/        LangGraph 工具（run_shell、qq_*、cron）
-core/         编排、群聊管线、身份、记忆、定时、承诺
-interface/    LLM 与平台适配器
-web/          管理台 SPA（Vite + React）
-tui/          Textual 终端客户端
-config/       人格 / 身份 / 系统 yaml
+app/          FastAPI, auth, Runtime
+agent/        LangGraph tools (run_shell, qq_*, cron)
+core/         orchestration, group pipeline, identity, memory, cron, commitments
+interface/    LLM factory and platform adapters
+web/          admin SPA (Vite + React)
+tui/          Textual terminal client
+config/       persona / identity / sys yaml
 ```
 
-## 快速开始（30 秒摸到界面）
+## Quick start
 
-需要：[uv](https://github.com/astral-sh/uv)、Python 3.12+。
+Needs [uv](https://github.com/astral-sh/uv) and Python 3.12+.
 
 ```bash
 git clone git@github.com:rovinax/luopita.git
@@ -78,77 +82,76 @@ uv sync
 uv run python main.py
 ```
 
-打开 http://127.0.0.1:5170 — mock 模式下无需 API Key 也能走通对话链路。未构建前端时根路径只返回 JSON；要看控制台先 `cd web && npm install && npm run build`。
+Open http://127.0.0.1:5170 — mock mode needs no API key. Without a frontend build the root path returns JSON only; run `cd web && npm install && npm run build` for the admin console.
 
-更完整的安装、Docker、扫码登录 QQ 见 **[文档站](https://rovinax.github.io/luopita/)**（[部署教程](docs/deploy.md)）。
+Install, Docker, and QQ login: **[docs](https://rovinax.github.io/luopita/)** ([deploy](docs/deploy.md)).
 
-## Docker 一键（接 QQ）
+## Docker (QQ via NapCat)
 
 ```bash
 cp .env.example .env
-# 编辑 .env：LUOPITA_API_KEY、LUOPITA_ADMIN_TOKEN，并改掉默认 token
+# Set LUOPITA_API_KEY, LUOPITA_ADMIN_TOKEN, and rotate demo tokens
 cp config/identity.example.yaml config/identity.yaml
-# 在 identity.yaml 里填入你的 QQ 作为 owners
+# Add your QQ number under owners
 
 export NAPCAT_UID=$(id -u) NAPCAT_GID=$(id -g)
 COMPOSE_FILE=docker-compose.yml docker compose up --build -d
 ```
 
-| 服务 | 地址 |
-|------|------|
-| 控制台 | http://localhost:5170 |
+| Service | URL |
+|---------|-----|
+| Admin console | http://localhost:5170 |
 | NapCat WebUI | http://localhost:6099/webui |
-| 健康检查 | `GET /health` |
+| Health | `GET /health` |
 
-本地热重载开发：保留 `.env` 里的 `COMPOSE_FILE=...:docker-compose.dev.yml` 后 `docker compose up --build -d`。
+Local hot reload: keep `COMPOSE_FILE=...:docker-compose.dev.yml` in `.env`, then `docker compose up --build -d`.
 
-## 配置要点
+## Configuration
 
-| 变量 / 文件 | 说明 |
-|-------------|------|
-| `LUOPITA_API_KEY` | 模型密钥；空且 `PROVIDER=mock` 则离线回复 |
-| `LUOPITA_ADMIN_TOKEN` | 管理 API / 控制台；公网必填 |
-| `LUOPITA_DATABASE_URL` | `postgresql://...` 或 `memory://` |
-| `LUOPITA_REDIS_URL` | `redis://...` 或 `memory://` |
-| `config/identity.yaml` | 主人、唤醒词、群聊插话策略（gitignore） |
-| `config/person.yaml` | 人格；可用 `person.example.yaml` 覆盖 |
-| `config/voice_examples.yaml` | 说话样例（按场景注入，不是记忆） |
+| Variable / file | Role |
+|-----------------|------|
+| `LUOPITA_API_KEY` | LLM key; with `PROVIDER=mock` you can leave it empty |
+| `LUOPITA_ADMIN_TOKEN` | Admin API / console; required on a public host |
+| `LUOPITA_DATABASE_URL` | `postgresql://...` or `memory://` |
+| `LUOPITA_REDIS_URL` | `redis://...` or `memory://` |
+| `config/identity.yaml` | Owners, wake words, group chime policy (gitignored) |
+| `config/person.yaml` | Persona; start from `person.example.yaml` |
+| `config/voice_examples.yaml` | Tone examples (injected by scene, not stored as memory) |
 
-密钥相关约定见 [SECURITY.md](SECURITY.md) / [文档·安全](https://rovinax.github.io/luopita/security/)。**不要把真实 QQ、`.env`、NapCat 登录态提交进仓库。**
+Secrets: [SECURITY.md](SECURITY.md) / [docs · security](https://rovinax.github.io/luopita/security/). **Do not commit real QQ numbers, `.env`, or NapCat login state.**
 
-## 开发与测试
+## Development
 
 ```bash
 uv run python -m unittest discover -s tests -p "test_*.py"
-# 或 ./scripts/run_tests.sh
-uv run python tui/ui.py          # 需先起后端
-cd web && npm install && npm run dev   # Vite :5173 → 代理 :5170
+# or ./scripts/run_tests.sh
+uv run python tui/ui.py          # start the backend first
+cd web && npm install && npm run dev   # Vite :5173 → proxy :5170
 
-# 本地预览文档站
 uv sync --group docs
 uv run mkdocs serve
 ```
 
-CI 会在每次 push / PR 跑单元测试、前端构建与文档构建；`master` 会部署 [GitHub Pages 文档站](https://rovinax.github.io/luopita/)，并推送镜像到 `ghcr.io/rovinax/luopita`。
+CI runs tests, the frontend build, and MkDocs on every push / PR. `master` publishes the [docs site](https://rovinax.github.io/luopita/) and `ghcr.io/rovinax/luopita`.
 
 ```bash
 docker pull ghcr.io/rovinax/luopita:latest
 ```
 
-首次拉取私有包需 `docker login ghcr.io`；仓库设为 Public 且 Package 可见性为 public 后可直接拉取。
+Private GHCR packages need `docker login ghcr.io`. After the repo and package are public, pull works without login.
 
-## 扩展
+## Extending
 
-- 新平台：实现 `PlatformAdapter`（`enabled` + `send`），入站解析为 `InboundMessage`
-- NapCat WebSocket、飞书、Telegram 可挂到同一 `AdapterRegistry`（当前内置：`napcat` / `tui` / `admin`）
-- 命令走白名单 `run_shell`，危险 NapCat 动作（cookies / 退出登录等）默认拒绝
-- 主人斜杠命令：`/help` `/ping` `/status` `/time` `/whoami` `/model` `/allow` `/clear` `/cron`
-- 系统提示由 `core/identity.py` 的 `compose_system_prompt` 按角色、群/私聊、插话模式拼出，不是 `prompt/agent.md` 里的旧协议
+- New IM: implement `PlatformAdapter` (`enabled` + `send`) and parse inbound as `InboundMessage`
+- NapCat WebSocket, Feishu, or Telegram can hang off the same `AdapterRegistry` (built-in: `napcat` / `tui` / `admin`)
+- `run_shell` is an allowlist, not bash; dangerous NapCat actions (cookies / logout) are denied
+- Owner slash commands: `/help` `/ping` `/status` `/time` `/whoami` `/model` `/allow` `/clear` `/cron`
+- System prompts are composed by `compose_system_prompt` in `core/identity.py`; `prompt/agent.md` is not the old tag protocol
 
-## 许可证
+## License
 
 [MIT](LICENSE) © rovina
 
----
+## Topics
 
-关键词：QQ 机器人、NapCat、OneBot、LangGraph、群聊上下文、FastAPI chatbot、pgvector memory
+QQ bot · NapCat · OneBot 11 · LangGraph agent · FastAPI chatbot · QQ group chat · per-speaker context · Redis · Postgres · pgvector · Python 3.12
