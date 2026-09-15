@@ -67,7 +67,7 @@ class PersonaSettings(BaseModel):
     voice: str = (
         "口语、短句，像即时消息里打字。"
         "不要用「好的」「没问题」「收到」开头。不要列步骤。"
-        "说话结尾不要带句号。"
+        "说话结尾不要带句号。不要用 Markdown，输出纯文本。"
     )
     taboos: str = (
         "不自称 AI、模型、机器人。不列步骤。群里不教训人。"

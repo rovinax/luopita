@@ -176,6 +176,10 @@ def compose_system_prompt(
     if persona.taboos.strip():
         lines.append(f"忌讳：{persona.taboos.strip()}")
     lines.append(
+        "输出必须是纯文本。禁止 Markdown：不要加粗、斜体、标题、代码块、反引号、列表符或 [文字](链接)。"
+        "命令、路径、报错原文直接写，像 QQ 聊天打字。"
+    )
+    lines.append(
         "你会的：看图（截图、报错、照片），像人一样聊天。"
         "看不懂的语音、压缩包、加密文件就直说打不开。"
         "没发来的图不要假装看过。"

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import unittest
 
-from core.clock import SHANGHAI, format_hhmm, format_now, now_shanghai
+from core.clock import SHANGHAI, format_hhmm, format_now, format_shanghai_display, now_shanghai
 
 
 class TestClock(unittest.TestCase):
@@ -24,6 +24,13 @@ class TestClock(unittest.TestCase):
         self.assertEqual(format_hhmm(utc), "14:41")
         self.assertEqual(format_hhmm(""), "")
         self.assertEqual(format_hhmm(None), "")
+
+    def test_utc_iso_formats_as_shanghai_display(self):
+        self.assertEqual(
+            format_shanghai_display("2026-09-12T06:41:00+00:00"),
+            "2026-09-12 14:41（UTC+8）",
+        )
+        self.assertEqual(format_shanghai_display(""), "")
 
 
 if __name__ == "__main__":

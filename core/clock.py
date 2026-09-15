@@ -45,3 +45,10 @@ def format_hhmm(value: object) -> str:
     if local is None:
         return ""
     return local.strftime("%H:%M")
+
+
+def format_shanghai_display(value: object) -> str:
+    local = parse_created_at(value)
+    if local is None:
+        return str(value or "").strip()
+    return f"{local:%Y-%m-%d %H:%M}（UTC+8）"

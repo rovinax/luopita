@@ -50,6 +50,45 @@ class TestOutboundSanitize(unittest.TestCase):
         }
         self.assertEqual(last_ai_text(result), "今晚题发了")
 
+    def test_strips_common_markdown(self):
+        raw = (
+            "## 排查\n"
+            "先看 **postgres** 日志，别用 *教程腔*\n"
+            "\n"
+            "```bash\n"
+            "docker compose logs postgres --tail 50\n"
+            "```\n"
+            "\n"
+            "- 先看端口\n"
+            "- 再看密码\n"
+            "\n"
+            "参考 [文档](https://example.com)"
+        )
+        cleaned = sanitize_outbound_text(raw)
+        self.assertNotIn("**", cleaned)
+        self.assertNotIn("##", cleaned)
+        self.assertNotIn("```", cleaned)
+        self.assertNotIn("`", cleaned)
+        self.assertNotIn("[文档](", cleaned)
+        self.assertIn("postgres", cleaned)
+        self.assertIn("docker compose logs postgres --tail 50", cleaned)
+        self.assertIn("先看端口", cleaned)
+        self.assertIn("文档 https://example.com", cleaned)
+        self.assertIn("\n\n", cleaned)
+
+    def test_keeps_filenames_silence_and_cq(self):
+        self.assertEqual(
+            sanitize_outbound_text("改 tests/test_clock.py 再跑"),
+            "改 tests/test_clock.py 再跑",
+        )
+        self.assertEqual(sanitize_outbound_text("[SILENCE]"), "[SILENCE]")
+        self.assertEqual(sanitize_outbound_text("[CQ:at,qq=1001] 你看下"), "[CQ:at,qq=1001] 你看下")
+        self.assertEqual(sanitize_outbound_text("3 * 4 * 5"), "3 * 4 * 5")
+
+    def test_last_ai_text_strips_markdown(self):
+        result = {"messages": [AIMessage(content="别 **加粗**，直接 `ls`")]}
+        self.assertEqual(last_ai_text(result), "别 加粗，直接 ls")
+
 
 class _CaptureAdapter:
     name = "napcat"
@@ -92,6 +131,20 @@ class TestSendGate(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(mid, "1")
         self.assertEqual(adapter.sent, ["今晚题发了"])
+
+    async def test_registry_strips_markdown(self):
+        adapter = _CaptureAdapter()
+        registry = AdapterRegistry([adapter])
+        mid = await registry.send(
+            OutboundMessage(
+                platform="napcat",
+                channel_type="group",
+                chat_id="1",
+                text="先看 **postgres** 日志\n\n`docker compose logs postgres`",
+            )
+        )
+        self.assertEqual(mid, "1")
+        self.assertEqual(adapter.sent, ["先看 postgres 日志\n\ndocker compose logs postgres"])
 
 
 if __name__ == "__main__":

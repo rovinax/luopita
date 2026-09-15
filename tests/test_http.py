@@ -154,6 +154,7 @@ class TestHttpAPI(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["display_name"], "Ada")
             self.assertEqual(rows[0]["card"]["reply_pref"], "短")
+            self.assertEqual(rows[0]["updated_at"], "2026-09-14 08:00（UTC+8）")
             self.assertIn("[当前说话人]", rows[0]["prompt"])
             deleted = client.delete(
                 "/api/profiles",

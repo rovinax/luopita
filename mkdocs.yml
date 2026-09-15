@@ -1,5 +1,5 @@
 site_name: Luopita
-site_description: Human-like QQ group chatbot kernel — NapCat, LangGraph, per-speaker context
+site_description: 会插话的 QQ 群聊机器人内核 — NapCat、LangGraph、按说话人分片、Redis + Postgres/pgvector
 site_url: https://rovinax.github.io/luopita/
 site_author: rovina
 repo_url: https://github.com/rovinax/luopita

@@ -1,7 +1,7 @@
 [project]
 name = "luopita"
 version = "0.2.0"
-description = "Human-like QQ group chatbot kernel: NapCat/OneBot, LangGraph agent, per-speaker context shards, Redis + Postgres/pgvector."
+description = "Human-like QQ group chatbot kernel: NapCat/OneBot, LangGraph, per-speaker shards, Redis + Postgres/pgvector, owner cron and commitments."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
