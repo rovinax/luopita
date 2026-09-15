@@ -9,33 +9,55 @@
 [![LangGraph](https://img.shields.io/badge/agent-LangGraph-violet.svg)](https://github.com/langchain-ai/langgraph)
 [![Docs Site](https://img.shields.io/badge/docs-MkDocs%20Material-teal.svg)](https://rovinax.github.io/luopita/)
 
-**会像人一样插话的 QQ 群聊机器人内核** — NapCat / OneBot 接入，LangGraph Agent 驱动，群聊按说话人分片，热上下文进 Redis，冷记忆落 Postgres + pgvector。
+**会像人一样插话的 QQ 群聊机器人内核** — NapCat / OneBot 接入，LangGraph Agent 驱动，群聊按说话人分片。热上下文进 Redis，温数据落 Postgres，冷检索走 pgvector（本地哈希向量，不调外部 embedding API）。
 
 > 不是又一个「整群共用一条会话」的 bot。Luopita 把触发、路由、组装、压缩和存储拆开，尽量避免 A 的话题被答给 B。
+
+当前版本 **0.2.0**。完整说明见 **[文档站](https://rovinax.github.io/luopita/)**。
 
 ## 为什么用它
 
 | 痛点 | Luopita 怎么处理 |
 |------|------------------|
 | 群里串话、抢别人话题 | 按说话人分片 + 旁听背景隔离 + 裸 `@` 走开场 |
-| 上下文又贵又乱 | Redis 热分片 / Postgres 温存储 / 向量冷检索 |
-| 多入口各写一套逻辑 | NapCat、TUI、管理台统一成 `InboundMessage` → 同一 Agent |
+| 上下文又贵又乱 | Redis 热分片 / Postgres 温存储 / pgvector 冷检索 |
+| 多入口各写一套逻辑 | NapCat、TUI、管理台统一成 `InboundMessage` → 同一编排器 |
+| 主人私事漏给群友 | `owner` / `user` 两套图；shell、QQ 工具、定时任务只给主人 |
 | 落地麻烦 | 一份 Compose：Postgres + Redis + NapCat + App |
+
+## 现在能做什么
+
+- 群聊五层管线：触发 → 分片路由 → 上下文组装 → 压缩 → 热/温/冷存储
+- 主人斜杠命令与自然语言定时任务（`/cron` 不经模型）
+- 从对话里抽出「明天提醒我交周报」这类开放承诺，到期主动跟进（限频）
+- 说话样例按场景注入 system，不是会话记忆；群友画像只描述当前说话人
+- 出站清洗：剥 Markdown / 泄漏的 tool-call 标记，再按气泡拆成多条 QQ 消息
+- 管理台：总览、配置、会话对话、画像只读查看
 
 ## 架构一览
 
 ```text
 NapCat (QQ) ──webhook──┐
-TUI WebSocket ─────────┼── FastAPI ── ChatOrchestrator ── LangGraph
+TUI WebSocket ─────────┼── FastAPI ── ChatOrchestrator
 Admin SPA /api/chat ───┘         │
+                                 ├── owner_graph / user_graph / cron_graph
                                  ├── PostgresSaver（短期 thread / 分片）
-                                 ├── Redis（群活跃分片）
-                                 ├── group_events + pgvector（冷记忆）
-                                 ├── long_term_memories（主人长期记忆）
-                                 └── cron_jobs（主人定时任务）
+                                 ├── Redis HotStore（活跃分片、实体栈）
+                                 └── Postgres
+                                       group_events + pgvector
+                                       user_profiles / long_term_memories
+                                       cron_jobs / commitments / owner_scratchpads
 ```
 
-群聊五层管线：**触发 → 分片路由 → 上下文组装 → 压缩 → 热/温/冷存储**。
+```text
+app/          FastAPI、鉴权、Runtime
+agent/        LangGraph 工具（run_shell、qq_*、cron）
+core/         编排、群聊管线、身份、记忆、定时、承诺
+interface/    LLM 与平台适配器
+web/          管理台 SPA（Vite + React）
+tui/          Textual 终端客户端
+config/       人格 / 身份 / 系统 yaml
+```
 
 ## 快速开始（30 秒摸到界面）
 
@@ -56,7 +78,7 @@ uv sync
 uv run python main.py
 ```
 
-打开 http://127.0.0.1:5170 — mock 模式下无需 API Key 也能走通对话链路。
+打开 http://127.0.0.1:5170 — mock 模式下无需 API Key 也能走通对话链路。未构建前端时根路径只返回 JSON；要看控制台先 `cd web && npm install && npm run build`。
 
 更完整的安装、Docker、扫码登录 QQ 见 **[文档站](https://rovinax.github.io/luopita/)**（[部署教程](docs/deploy.md)）。
 
@@ -84,11 +106,11 @@ COMPOSE_FILE=docker-compose.yml docker compose up --build -d
 
 | 变量 / 文件 | 说明 |
 |-------------|------|
-| `LUOPITA_API_KEY` | 模型密钥；空则 mock |
+| `LUOPITA_API_KEY` | 模型密钥；空且 `PROVIDER=mock` 则离线回复 |
 | `LUOPITA_ADMIN_TOKEN` | 管理 API / 控制台；公网必填 |
 | `LUOPITA_DATABASE_URL` | `postgresql://...` 或 `memory://` |
 | `LUOPITA_REDIS_URL` | `redis://...` 或 `memory://` |
-| `config/identity.yaml` | 主人、唤醒词、群聊策略（gitignore） |
+| `config/identity.yaml` | 主人、唤醒词、群聊插话策略（gitignore） |
 | `config/person.yaml` | 人格；可用 `person.example.yaml` 覆盖 |
 | `config/voice_examples.yaml` | 说话样例（按场景注入，不是记忆） |
 
@@ -98,6 +120,7 @@ COMPOSE_FILE=docker-compose.yml docker compose up --build -d
 
 ```bash
 uv run python -m unittest discover -s tests -p "test_*.py"
+# 或 ./scripts/run_tests.sh
 uv run python tui/ui.py          # 需先起后端
 cd web && npm install && npm run dev   # Vite :5173 → 代理 :5170
 
@@ -117,9 +140,10 @@ docker pull ghcr.io/rovinax/luopita:latest
 ## 扩展
 
 - 新平台：实现 `PlatformAdapter`（`enabled` + `send`），入站解析为 `InboundMessage`
-- NapCat WebSocket、飞书、Telegram 可挂到同一 `AdapterRegistry`
+- NapCat WebSocket、飞书、Telegram 可挂到同一 `AdapterRegistry`（当前内置：`napcat` / `tui` / `admin`）
 - 命令走白名单 `run_shell`，危险 NapCat 动作（cookies / 退出登录等）默认拒绝
 - 主人斜杠命令：`/help` `/ping` `/status` `/time` `/whoami` `/model` `/allow` `/clear` `/cron`
+- 系统提示由 `core/identity.py` 的 `compose_system_prompt` 按角色、群/私聊、插话模式拼出，不是 `prompt/agent.md` 里的旧协议
 
 ## 许可证
 
